@@ -1,4 +1,3 @@
-import json
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Depends, Request
@@ -86,19 +85,36 @@ def index(request: Request, db: Session = Depends(get_db)):
 @app.post("/decide")
 async def decide(request: Request, db: Session = Depends(get_db)):
     from models import Activity, ActivityWeight, Decision, Metric
+    from services.ontology import UNIVERSAL_METRICS
 
     form = await request.form()
     query = form.get("q", "").strip()
+    mode = form.get("mode", "").strip().lower()
+
+    # ── Helper: seed default weights for one activity ──
+    def _seed_default_weights(activity_id: int) -> None:
+        all_metrics = db.query(Metric).all()
+        metric_map = {m.name: m for m in all_metrics}
+        for m in UNIVERSAL_METRICS:
+            metric = metric_map.get(m["name"])
+            if metric:
+                db.add(
+                    ActivityWeight(
+                        activity_id=activity_id,
+                        metric_id=metric.id,
+                        weight=m["default_weight"],
+                    )
+                )
 
     if not query:
         decisions = db.query(Decision).order_by(Decision.created_at.desc()).all()
         for d in decisions:
-            mode = d.mode if hasattr(d, "mode") and d.mode else "choose"
+            m = d.mode if hasattr(d, "mode") and d.mode else "choose"
             d.result_url = {
                 "diagnose": f"/evaluate/{d.id}/result",
                 "screen": f"/screen/{d.id}/result",
                 "rank": f"/rank/{d.id}/result",
-            }.get(mode, f"/decisions/{d.id}/result")
+            }.get(m, f"/decisions/{d.id}/result")
         return templates.TemplateResponse(
             request,
             "index.html",
@@ -111,7 +127,137 @@ async def decide(request: Request, db: Session = Depends(get_db)):
             },
         )
 
-    # Parse the question — try CHOOSE first
+    # ── Explicit mode routing (before heuristic) ──
+    if mode == "choose":
+        parsed = parse_question(query)
+        alternatives = parsed["alternatives"]
+        is_parsed = parsed["parsed"]
+        category = parsed["category"]
+        criteria_list = parsed["criteria"]
+
+        decision = Decision(query=query, category=category)
+        db.add(decision)
+        db.flush()
+
+        for alt_name in alternatives:
+            activity = Activity(
+                name=alt_name, category=category, decision_id=decision.id
+            )
+            db.add(activity)
+            db.flush()
+            _seed_default_weights(activity.id)
+
+        db.commit()
+
+        all_metrics = db.query(Metric).all()
+        metric_map = {m.name: m for m in all_metrics}
+        criteria_with_ids = []
+        for c in criteria_list:
+            metric = metric_map.get(c["name"])
+            criteria_with_ids.append(
+                {**c, "id": metric.id if metric else None}
+            )
+
+        return templates.TemplateResponse(
+            request,
+            "decision_review.html",
+            {
+                "request": request,
+                "decision": decision,
+                "alternatives": alternatives,
+                "criteria": criteria_with_ids,
+                "category": category,
+                "parsed": is_parsed,
+                "active_page": "decisions",
+            },
+        )
+
+    if mode == "diagnose":
+        from services.parser import extract_subject
+
+        diag = extract_subject(query)
+        subject = diag.get("subject", "This option")
+
+        decision = Decision(query=query, category="General", mode="diagnose")
+        db.add(decision)
+        db.flush()
+
+        activity = Activity(
+            name=subject, category="General", decision_id=decision.id
+        )
+        db.add(activity)
+        db.flush()
+        _seed_default_weights(activity.id)
+        db.commit()
+
+        return RedirectResponse(
+            url=f"/evaluate/{decision.id}/review", status_code=303
+        )
+
+    if mode == "rank":
+        from services.parser import extract_list
+
+        list_parsed = extract_list(query)
+        alternatives = list_parsed.get("alternatives", [])
+
+        decision = Decision(query=query, category="General", mode="rank")
+        db.add(decision)
+        db.flush()
+
+        alt_names = (
+            alternatives
+            if alternatives
+            else ["Option A", "Option B", "Option C"]
+        )
+        for name in alt_names:
+            activity = Activity(
+                name=name, category="General", decision_id=decision.id
+            )
+            db.add(activity)
+            db.flush()
+            _seed_default_weights(activity.id)
+
+        db.commit()
+
+        if len(alternatives) >= 3:
+            return RedirectResponse(
+                url=f"/rank/{decision.id}/review", status_code=303
+            )
+        else:
+            # Render rank review with validation/help
+            all_metrics = (
+                db.query(Metric)
+                .order_by(Metric.category, Metric.name)
+                .all()
+            )
+            metric_map = {m.name: m for m in all_metrics}
+            criteria = []
+            for m in UNIVERSAL_METRICS:
+                metric = metric_map.get(m["name"])
+                criteria.append(
+                    {
+                        **m,
+                        "id": metric.id if metric else None,
+                    }
+                )
+            validation = {
+                "error": f"Ranking requires at least 3 alternatives. You provided {len(alternatives)}."
+            }
+            return templates.TemplateResponse(
+                request,
+                "rank_review.html",
+                {
+                    "request": request,
+                    "decision": decision,
+                    "alternatives": alt_names,
+                    "criteria": criteria,
+                    "parsed": False,
+                    "validation": validation,
+                    "active_page": "decisions",
+                },
+            )
+
+    # ── Heuristic fallback (no explicit mode) ──
     parsed = parse_question(query)
     alternatives = parsed["alternatives"]
     criteria_list = parsed["criteria"]
@@ -125,8 +271,6 @@ async def decide(request: Request, db: Session = Depends(get_db)):
         diag = extract_subject(query)
         if diag["parsed"]:
             # Route as DIAGNOSE
-            from services.ontology import UNIVERSAL_METRICS
-
             decision = Decision(query=query, category="General", mode="diagnose")
             db.add(decision)
             db.flush()
@@ -137,74 +281,15 @@ async def decide(request: Request, db: Session = Depends(get_db)):
             )
             db.add(activity)
             db.flush()
-
-            all_metrics = db.query(Metric).all()
-            metric_map = {m.name: m for m in all_metrics}
-            for m in UNIVERSAL_METRICS:
-                metric = metric_map.get(m["name"])
-                if metric:
-                    aw = ActivityWeight(
-                        activity_id=activity.id,
-                        metric_id=metric.id,
-                        weight=m["default_weight"],
-                    )
-                    db.add(aw)
+            _seed_default_weights(activity.id)
             db.commit()
             return RedirectResponse(
                 url=f"/evaluate/{decision.id}/review", status_code=303
             )
 
-        # If DIAGNOSE didn't match, try SCREEN
-        from services.parser import extract_thresholds, extract_list
+        # If DIAGNOSE didn't match, try RANK
+        from services.parser import extract_list
 
-        thresholds = extract_thresholds(query)
-        if thresholds:
-            # Route as SCREEN
-            decision = Decision(query=query, category="General", mode="screen")
-            # Map metric names to IDs
-            all_metrics = db.query(Metric).all()
-            metric_map = {m.name: m for m in all_metrics}
-            thresholds_with_ids = []
-            for t in thresholds:
-                metric = metric_map.get(t["metric_name"])
-                if metric:
-                    thresholds_with_ids.append(
-                        {
-                            "metric_id": metric.id,
-                            "operator": t["operator"],
-                            "value": t["value"],
-                        }
-                    )
-            if thresholds_with_ids:
-                decision.thresholds = json.dumps(thresholds_with_ids)
-            db.add(decision)
-            db.flush()
-
-            from services.ontology import UNIVERSAL_METRICS as UM
-
-            for name in ["Option A", "Option B"]:
-                activity = Activity(
-                    name=name, category="General", decision_id=decision.id
-                )
-                db.add(activity)
-                db.flush()
-                all_metrics = db.query(Metric).all()
-                metric_map = {m.name: m for m in all_metrics}
-                for m in UM:
-                    metric = metric_map.get(m["name"])
-                    if metric:
-                        aw = ActivityWeight(
-                            activity_id=activity.id,
-                            metric_id=metric.id,
-                            weight=m["default_weight"],
-                        )
-                        db.add(aw)
-            db.commit()
-            return RedirectResponse(
-                url=f"/screen/{decision.id}/review", status_code=303
-            )
-
-        # Try RANK
         list_parsed = extract_list(query)
         if list_parsed["parsed"]:
             # Route as RANK
@@ -212,32 +297,20 @@ async def decide(request: Request, db: Session = Depends(get_db)):
             db.add(decision)
             db.flush()
 
-            from services.ontology import UNIVERSAL_METRICS as UM
-
             for name in list_parsed["alternatives"]:
                 activity = Activity(
                     name=name, category="General", decision_id=decision.id
                 )
                 db.add(activity)
                 db.flush()
-                all_metrics = db.query(Metric).all()
-                metric_map = {m.name: m for m in all_metrics}
-                for m in UM:
-                    metric = metric_map.get(m["name"])
-                    if metric:
-                        aw = ActivityWeight(
-                            activity_id=activity.id,
-                            metric_id=metric.id,
-                            weight=m["default_weight"],
-                        )
-                        db.add(aw)
+                _seed_default_weights(activity.id)
+
             db.commit()
-            return RedirectResponse(url=f"/rank/{decision.id}/review", status_code=303)
+            return RedirectResponse(
+                url=f"/rank/{decision.id}/review", status_code=303
+            )
 
     # Continue as CHOOSE
-    all_metrics = db.query(Metric).all()
-    metric_map = {m.name: m for m in all_metrics}
-
     decision = Decision(query=query, category=category)
     db.add(decision)
     db.flush()
@@ -250,19 +323,12 @@ async def decide(request: Request, db: Session = Depends(get_db)):
         )
         db.add(activity)
         db.flush()
-
-        for crit in criteria_list:
-            metric = metric_map.get(crit["name"])
-            if metric:
-                aw = ActivityWeight(
-                    activity_id=activity.id,
-                    metric_id=metric.id,
-                    weight=crit["default_weight"],
-                )
-                db.add(aw)
+        _seed_default_weights(activity.id)
 
     db.commit()
 
+    all_metrics = db.query(Metric).all()
+    metric_map = {m.name: m for m in all_metrics}
     criteria_with_ids = []
     for c in criteria_list:
         metric = metric_map.get(c["name"])

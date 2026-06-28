@@ -1,6 +1,11 @@
 """Tests for the parser module."""
 
-from services.parser import extract_list, extract_subject, extract_thresholds
+from services.parser import (
+    extract_list,
+    extract_subject,
+    extract_thresholds,
+    extract_thresholds_detailed,
+)
 
 
 class TestExtractSubject:
@@ -194,3 +199,82 @@ class TestExtractThresholds:
         assert r["metric_name"] == "Quality"
         assert r["operator"] == ">="
         assert r["value"] == 75.0
+
+
+class TestExtractThresholdsDetailed:
+    def test_percent_suffix(self):
+        """% suffix is stripped and value parsed correctly."""
+        result = extract_thresholds_detailed("Cost <= 60%")
+        assert len(result["valid"]) == 1
+        assert result["valid"][0]["metric_name"] == "Cost"
+        assert result["valid"][0]["value"] == 60.0
+        assert len(result["unknown"]) == 0
+        assert len(result["out_of_range"]) == 0
+
+    def test_percent_suffix_pattern2(self):
+        """% suffix on keyword-value-metric pattern."""
+        result = extract_thresholds_detailed("at least 80% quality")
+        assert len(result["valid"]) == 1
+        assert result["valid"][0]["metric_name"] == "Quality"
+        assert result["valid"][0]["value"] == 80.0
+
+    def test_unknown_metric(self):
+        """Unknown metric threshold populates unknown list."""
+        result = extract_thresholds_detailed("popularity > 100")
+        assert len(result["valid"]) == 0
+        assert len(result["unknown"]) >= 1
+        unknown_names = [u["metric_name"].lower() for u in result["unknown"]]
+        assert "popularity" in unknown_names
+
+    def test_out_of_range(self):
+        """Threshold value > 100 populates out_of_range list."""
+        result = extract_thresholds_detailed("Quality >= 150")
+        assert len(result["valid"]) == 0
+        assert len(result["out_of_range"]) >= 1
+        assert result["out_of_range"][0]["metric_name"] == "Quality"
+        assert result["out_of_range"][0]["value"] == 150.0
+        assert "value > 100" in result["out_of_range"][0]["reason"]
+
+    def test_out_of_range_negative(self):
+        """Negative values don't match threshold patterns (regex requires digits)."""
+        result = extract_thresholds_detailed("Cost <= -10")
+        # -10 doesn't match \d+ pattern, so no threshold is extracted
+        assert len(result["valid"]) == 0
+        assert len(result["unknown"]) == 0
+        assert len(result["out_of_range"]) == 0
+
+    def test_mixed_valid_and_unknown(self):
+        """Known and unknown metrics are separated correctly."""
+        result = extract_thresholds_detailed("Cost <= 60 and popularity > 50")
+        assert len(result["valid"]) == 1
+        assert result["valid"][0]["metric_name"] == "Cost"
+        assert len(result["unknown"]) >= 1
+        unknown_names = [u["metric_name"].lower() for u in result["unknown"]]
+        assert "popularity" in unknown_names
+
+    def test_backward_compatible_extract_thresholds(self):
+        """extract_thresholds() retains original behavior (no validation)."""
+        # Known metric
+        r1 = extract_thresholds("Cost <= 60")
+        assert len(r1) == 1
+        assert r1[0]["metric_name"] == "Cost"
+        # Unknown metric — still ignored
+        r2 = extract_thresholds("FooBar <= 60")
+        assert r2 == []
+        # Out-of-range — still included (original behavior had no validation)
+        r3 = extract_thresholds("Quality >= 150")
+        assert len(r3) == 1
+        assert r3[0]["value"] == 150.0
+        # Multiple
+        r4 = extract_thresholds("Cost <= 60 and Quality >= 80")
+        assert len(r4) == 2
+
+    def test_detailed_returns_three_keys(self):
+        """extract_thresholds_detailed always returns valid, unknown, out_of_range keys."""
+        result = extract_thresholds_detailed("Hello world")
+        assert "valid" in result
+        assert "unknown" in result
+        assert "out_of_range" in result
+        assert result["valid"] == []
+        assert result["unknown"] == []
+        assert result["out_of_range"] == []

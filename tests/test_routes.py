@@ -1,24 +1,19 @@
 """Tests for FastAPI routes using TestClient.
 
-Uses a per-function temporary SQLite database file to avoid issues
-with in-memory databases having separate connection pools.
+Uses real main.app with overridden get_db dependency.
+Per-function temporary SQLite database file.
 """
 
 import os
 import tempfile
 
 import pytest
-from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import sessionmaker
 
 from database import Base, get_db
-from routers import metrics
-from routers.decisions import router as decisions_router
-from routers.evaluate import router as evaluate_router
-from routers.screen import router as screen_router
-from routers.rank import router as rank_router
+from main import app
 
 # Per-test state
 _test_db_path = None
@@ -82,235 +77,12 @@ def db():
 
 @pytest.fixture(scope="function")
 def client(db):
-    """Create a TestClient with all routes but no lifespan."""
-    test_app = FastAPI(title="Pondera Test")
-
-    test_app.include_router(metrics.router)
-    test_app.include_router(decisions_router)
-    test_app.include_router(evaluate_router)
-    test_app.include_router(screen_router)
-    test_app.include_router(rank_router)
-
-    # Add the main app routes (index + decide)
-    from fastapi.responses import HTMLResponse, RedirectResponse
-    from fastapi.templating import Jinja2Templates
-    from fastapi import Request, Depends
-
-    templates = Jinja2Templates(directory="templates")
-
-    @test_app.get("/", response_class=HTMLResponse)
-    def test_index(request: Request, db: Session = Depends(get_db)):
-        from models import Decision
-
-        decisions = db.query(Decision).order_by(Decision.created_at.desc()).all()
-        for d in decisions:
-            mode = d.mode if hasattr(d, "mode") and d.mode else "choose"
-            d.result_url = {
-                "diagnose": f"/evaluate/{d.id}/result",
-                "screen": f"/screen/{d.id}/result",
-                "rank": f"/rank/{d.id}/result",
-            }.get(mode, f"/decisions/{d.id}/result")
-        return templates.TemplateResponse(
-            request,
-            "index.html",
-            {"request": request, "decisions": decisions, "active_page": "home"},
-        )
-
-    @test_app.post("/decide")
-    async def test_decide(request: Request, db: Session = Depends(get_db)):
-        from models import Activity, ActivityWeight, Decision, Metric
-        from services.parser import parse_question, extract_subject
-
-        form = await request.form()
-        query = form.get("q", "").strip()
-
-        if not query:
-            decisions = db.query(Decision).order_by(Decision.created_at.desc()).all()
-            return templates.TemplateResponse(
-                request,
-                "index.html",
-                {
-                    "request": request,
-                    "decisions": decisions,
-                    "query": query,
-                    "error": "Please enter a question.",
-                    "active_page": "home",
-                },
-            )
-
-        # Parse the question — try CHOOSE first
-        parsed = parse_question(query)
-        alternatives = parsed["alternatives"]
-        criteria_list = parsed["criteria"]
-        category = parsed["category"]
-        is_parsed = parsed["parsed"]
-
-        # If CHOOSE didn't find alternatives, try DIAGNOSE parsing
-        if not is_parsed:
-            diag = extract_subject(query)
-            if diag["parsed"]:
-                # Route as DIAGNOSE
-                from services.ontology import UNIVERSAL_METRICS
-
-                decision = Decision(query=query, category="General", mode="diagnose")
-                db.add(decision)
-                db.flush()
-
-                subject = diag["subject"]
-                activity = Activity(
-                    name=subject, category="General", decision_id=decision.id
-                )
-                db.add(activity)
-                db.flush()
-
-                all_metrics = db.query(Metric).all()
-                metric_map = {m.name: m for m in all_metrics}
-                for m in UNIVERSAL_METRICS:
-                    metric = metric_map.get(m["name"])
-                    if metric:
-                        aw = ActivityWeight(
-                            activity_id=activity.id,
-                            metric_id=metric.id,
-                            weight=m["default_weight"],
-                        )
-                        db.add(aw)
-                db.commit()
-                return RedirectResponse(
-                    url=f"/evaluate/{decision.id}/review", status_code=303
-                )
-
-            # If DIAGNOSE didn't match, try SCREEN
-            from services.parser import extract_thresholds, extract_list
-
-            thresholds = extract_thresholds(query)
-            if thresholds:
-                decision = Decision(query=query, category="General", mode="screen")
-                all_metrics = db.query(Metric).all()
-                metric_map = {m.name: m for m in all_metrics}
-                thresholds_with_ids = []
-                for t in thresholds:
-                    metric = metric_map.get(t["metric_name"])
-                    if metric:
-                        thresholds_with_ids.append(
-                            {
-                                "metric_id": metric.id,
-                                "operator": t["operator"],
-                                "value": t["value"],
-                            }
-                        )
-                if thresholds_with_ids:
-                    import json
-
-                    decision.thresholds = json.dumps(thresholds_with_ids)
-                db.add(decision)
-                db.flush()
-
-                from services.ontology import UNIVERSAL_METRICS as UM
-
-                for name in ["Option A", "Option B"]:
-                    activity = Activity(
-                        name=name, category="General", decision_id=decision.id
-                    )
-                    db.add(activity)
-                    db.flush()
-                    all_metrics = db.query(Metric).all()
-                    metric_map = {m.name: m for m in all_metrics}
-                    for m in UM:
-                        metric = metric_map.get(m["name"])
-                        if metric:
-                            aw = ActivityWeight(
-                                activity_id=activity.id,
-                                metric_id=metric.id,
-                                weight=m["default_weight"],
-                            )
-                            db.add(aw)
-                db.commit()
-                return RedirectResponse(
-                    url=f"/screen/{decision.id}/review", status_code=303
-                )
-
-            # Try RANK
-            list_parsed = extract_list(query)
-            if list_parsed["parsed"]:
-                decision = Decision(query=query, category="General", mode="rank")
-                db.add(decision)
-                db.flush()
-
-                from services.ontology import UNIVERSAL_METRICS as UM
-
-                for name in list_parsed["alternatives"]:
-                    activity = Activity(
-                        name=name, category="General", decision_id=decision.id
-                    )
-                    db.add(activity)
-                    db.flush()
-                    all_metrics = db.query(Metric).all()
-                    metric_map = {m.name: m for m in all_metrics}
-                    for m in UM:
-                        metric = metric_map.get(m["name"])
-                        if metric:
-                            aw = ActivityWeight(
-                                activity_id=activity.id,
-                                metric_id=metric.id,
-                                weight=m["default_weight"],
-                            )
-                            db.add(aw)
-                db.commit()
-                return RedirectResponse(
-                    url=f"/rank/{decision.id}/review", status_code=303
-                )
-
-        # Continue as CHOOSE
-        all_metrics = db.query(Metric).all()
-        metric_map = {m.name: m for m in all_metrics}
-
-        decision = Decision(query=query, category=category)
-        db.add(decision)
-        db.flush()
-
-        for alt_name in alternatives:
-            activity = Activity(
-                name=alt_name,
-                category=category,
-                decision_id=decision.id,
-            )
-            db.add(activity)
-            db.flush()
-
-            for crit in criteria_list:
-                metric = metric_map.get(crit["name"])
-                if metric:
-                    aw = ActivityWeight(
-                        activity_id=activity.id,
-                        metric_id=metric.id,
-                        weight=crit["default_weight"],
-                    )
-                    db.add(aw)
-
-        db.commit()
-
-        all_metrics = db.query(Metric).order_by(Metric.category, Metric.name).all()
-
-        return templates.TemplateResponse(
-            request,
-            "decision_review.html",
-            {
-                "request": request,
-                "decision": decision,
-                "alternatives": alternatives,
-                "criteria": criteria_list,
-                "all_metrics": all_metrics,
-                "category": category,
-                "parsed": is_parsed,
-                "active_page": "decisions",
-            },
-        )
-
-    # Override the get_db dependency in all routers
-    test_app.dependency_overrides[get_db] = _get_test_db
-
-    with TestClient(test_app) as c:
+    """Use the real main.app with overridden get_db."""
+    app.dependency_overrides[get_db] = _get_test_db
+    with TestClient(app) as c:
         yield c
+    # Clean up override to avoid cross-test pollution
+    app.dependency_overrides.pop(get_db, None)
 
 
 def test_index_page(client, db):
@@ -320,7 +92,7 @@ def test_index_page(client, db):
     assert "What's your decision today?" in response.text
     assert "House vs Apartment" in response.text
     assert "Tesla for commuting" in response.text
-    assert "Job offers by minimum criteria" in response.text
+    
     assert "Python, Java, Go" in response.text
     assert "Multi-Criteria Decision Analysis" in response.text
 
@@ -919,21 +691,21 @@ def test_decide_with_no_match_fallback(client, db):
 # ── SCREEN (Mode 3) tests ──
 
 
-def test_screen_via_decide(client, db):
-    """Threshold query via /decide → redirect to /screen/{id}/review"""
+def test_screen_direct_still_works(client, db):
+    """Direct POST /screen still works (backward compat)"""
     resp = client.post(
-        "/decide",
-        data={"q": "Cost <= 60 and Quality >= 70"},
-        follow_redirects=False,
+        "/screen", data={"q": "Screen jobs by cost"}, follow_redirects=False
     )
     assert resp.status_code == 303
-    assert resp.headers["location"].startswith("/screen/")
-    assert "/review" in resp.headers["location"]
+    import re
 
-    # Follow redirect
-    resp = client.get(resp.headers["location"])
-    assert resp.status_code == 200
-    assert "Screen Alternatives" in resp.text
+    decision_id = re.search(r"/screen/(\d+)/review", resp.headers["location"]).group(1)
+
+    # GET the review page
+    review_resp = client.get(f"/screen/{decision_id}/review")
+    assert review_resp.status_code == 200
+    assert "Screen Alternatives" in review_resp.text
+    assert "Threshold" in review_resp.text
 
 
 def test_screen_review_page(client, db):
@@ -954,60 +726,21 @@ def test_screen_review_page(client, db):
     assert "Threshold" in review_resp.text
 
 
-def test_screen_flow(client, db):
-    """Full flow: decide → refine → score → result"""
-    # Create via /decide
-    resp = client.post(
-        "/decide",
-        data={"q": "Cost <= 60"},
-        follow_redirects=False,
-    )
-    assert resp.status_code == 303
-    import re
+def test_screen_backward_compat_result(client, db):
+    """Existing screen decisions still render result page (backward compat)"""
+    from models import Activity, Decision
 
-    decision_id = re.search(r"/screen/(\d+)/review", resp.headers["location"]).group(1)
+    decision = Decision(query="Cost <= 60", category="General", mode="screen")
+    db.add(decision)
+    db.flush()
 
-    # Get metric IDs from seeded metrics
-    from models import Metric
+    activity = Activity(name="Cheap Option", category="General", decision_id=decision.id)
+    db.add(activity)
+    db.commit()
 
-    metrics = db.query(Metric).order_by(Metric.id).all()
-    assert len(metrics) >= 1
-
-    # Refine
-    refine_resp = client.post(
-        f"/screen/{decision_id}/refine",
-        data={
-            "alt_name_0": "Cheap Option",
-            "alt_name_1": "Expensive Option",
-            "metric_id_0": str(metrics[0].id),
-            "include_metric_0": "true",
-            "criterion_weight_0": "80",
-            "criterion_higher_0": "false",
-            "threshold_op_0": "<=",
-            "threshold_val_0": "60",
-        },
-        follow_redirects=False,
-    )
-    assert refine_resp.status_code == 303
-
-    # Follow to score page
-    score_page = client.get(refine_resp.headers["location"])
-    assert score_page.status_code == 200
-
-    # Submit scores
-    score_fields = re.findall(r'name="(score_\d+_\d+)"', score_page.text)
-    assert len(score_fields) >= 2
-
-    score_data = {}
-    for field in score_fields[:2]:
-        score_data[field] = "50"
-    score_resp = client.post(
-        f"/screen/{decision_id}/score",
-        data=score_data,
-    )
-    assert score_resp.status_code == 200
-    assert "Screen Results" in score_resp.text
-    assert "PASS" in score_resp.text or "FAIL" in score_resp.text
+    resp = client.get(f"/screen/{decision.id}/result")
+    assert resp.status_code == 200
+    assert "Screen Results" in resp.text
 
 
 def test_screen_not_found(client, db):
@@ -1178,3 +911,314 @@ def test_rank_result_reuses_decision_result(client, db):
     # decision_result.html has "Ranking"
     assert "Ranking" in result.text
     assert "%" in result.text
+
+
+# ── Explicit mode routing tests ──
+
+
+def test_explicit_mode_rank_routes_to_rank(client, db):
+    """mode=rank with list query → 303 to /rank/{id}/review"""
+    resp = client.post(
+        "/decide",
+        data={"mode": "rank", "q": "python, java, go"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    assert resp.headers["location"].startswith("/rank/")
+    assert "/review" in resp.headers["location"]
+
+
+def test_explicit_mode_rank_fewer_than_three(client, db):
+    """mode=rank with only 2 alternatives → stays in RANK, shows validation/help"""
+    resp = client.post(
+        "/decide",
+        data={"mode": "rank", "q": "python, java"},
+        follow_redirects=False,
+    )
+    # Should NOT redirect to rank review (no 303) - renders directly with help
+    # Actually, with mode=rank, fewer than 3 alternatives renders rank_review.html directly (200)
+    assert resp.status_code == 200
+    assert "Ranking Review" in resp.text or "ranking" in resp.text.lower()
+    # Should show validation message about needing 3 alternatives
+    assert "at least 3" in resp.text.lower()
+
+
+def test_explicit_mode_choose_still_works(client, db):
+    """mode=choose parses as CHOOSE and renders review page"""
+    resp = client.post(
+        "/decide",
+        data={"mode": "choose", "q": "House or Apartment?"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 200
+    assert "Decision Review" in resp.text
+    assert "House" in resp.text or "house" in resp.text.lower()
+    assert "Apartment" in resp.text or "apartment" in resp.text.lower()
+
+
+def test_explicit_mode_diagnose_still_works(client, db):
+    """mode=diagnose routes to DIAGNOSE review"""
+    resp = client.post(
+        "/decide",
+        data={"mode": "diagnose", "q": "How good is a Tesla?"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    assert resp.headers["location"].startswith("/evaluate/")
+
+    review_resp = client.get(resp.headers["location"])
+    assert review_resp.status_code == 200
+    assert "Tesla" in review_resp.text
+
+
+def test_no_mode_still_uses_heuristic(client, db):
+    """No mode param → heuristic fallback works as before"""
+    resp = client.post(
+        "/decide",
+        data={"q": "Should I buy a house or an apartment?"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 200
+    assert "Decision Review" in resp.text
+
+    # Heuristic rank detection
+    resp3 = client.post(
+        "/decide",
+        data={"q": "Rank Python, Java, Go"},
+        follow_redirects=False,
+    )
+    assert resp3.status_code == 303
+    assert resp3.headers["location"].startswith("/rank/")
+
+    # Heuristic diagnose detection
+    resp4 = client.post(
+        "/decide",
+        data={"q": "How good is Rust?"},
+        follow_redirects=False,
+    )
+    assert resp4.status_code == 303
+    assert resp4.headers["location"].startswith("/evaluate/")
+
+
+# ── Threshold filter tests (post-hoc on decision result page) ──
+
+
+def _create_decision_with_metric(client, db, query="House or Apartment?"):
+    """Helper: create a decision via /decide, refine with 1 metric, return decision_id and metric_id."""
+    resp = client.post("/decide", data={"q": query})
+    assert resp.status_code == 200
+    import re
+
+    match = re.search(r"/decisions/(\d+)/refine", resp.text)
+    assert match
+    decision_id = int(match.group(1))
+
+    # Get a metric
+    from models import Metric
+
+    metric = db.query(Metric).order_by(Metric.id).first()
+    assert metric is not None
+    metric_id = metric.id
+
+    # Refine with this metric and 2 alternatives
+    refine_resp = client.post(
+        f"/decisions/{decision_id}/refine",
+        data={
+            "alt_name_0": "House",
+            "alt_name_1": "Apartment",
+            "metric_id_0": str(metric_id),
+            "include_metric_0": "true",
+            "criterion_weight_0": "80",
+            "criterion_higher_0": "true",
+        },
+        follow_redirects=False,
+    )
+    assert refine_resp.status_code == 303
+    return decision_id, metric_id
+
+
+def test_decision_result_threshold_panel_renders(client, db):
+    """Result page shows "Filter by Thresholds" text."""
+    decision_id, _ = _create_decision_with_metric(client, db)
+
+    # Navigate to score page first to create the result context
+    resp = client.get(f"/decisions/{decision_id}/result")
+    assert resp.status_code == 200
+    assert "Filter by Thresholds" in resp.text
+
+
+def test_decision_apply_thresholds_valid(client, db):
+    """POST valid thresholds → stored in JSON + PASS/FAIL rendered."""
+    decision_id, metric_id = _create_decision_with_metric(client, db)
+
+    # First score (so filter doesn't show "no scores")
+    from models import Activity
+
+    activities = db.query(Activity).filter(Activity.decision_id == decision_id).all()
+    for act in activities:
+        from models import AlternativeScore
+
+        ascore = AlternativeScore(
+            activity_id=act.id, metric_id=metric_id, score=80
+        )
+        db.add(ascore)
+    db.commit()
+
+    # Apply valid threshold
+    resp = client.post(
+        f"/decisions/{decision_id}/thresholds",
+        data={
+            "threshold_metric_id_0": str(metric_id),
+            "threshold_op_0": "<=",
+            "threshold_val_0": "60",
+        },
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+
+    # Verify stored
+    from models import Decision
+    from json import loads
+
+    decision = db.query(Decision).filter(Decision.id == decision_id).first()
+    assert decision.thresholds is not None
+    stored = loads(decision.thresholds)
+    assert len(stored) >= 1
+    assert stored[0]["metric_id"] == metric_id
+    assert stored[0]["operator"] == "<="
+    assert stored[0]["value"] == 60.0
+
+    # Fetch result page — should show PASS/FAIL
+    result = client.get(f"/decisions/{decision_id}/result")
+    assert result.status_code == 200
+    assert "PASS" in result.text or "FAIL" in result.text
+
+
+def test_decision_apply_thresholds_invalid_range(client, db):
+    """POST threshold value 150 → error re-render with threshold_errors, NOT stored."""
+    decision_id, metric_id = _create_decision_with_metric(client, db)
+
+    resp = client.post(
+        f"/decisions/{decision_id}/thresholds",
+        data={
+            "threshold_metric_id_0": str(metric_id),
+            "threshold_op_0": "<=",
+            "threshold_val_0": "150",
+        },
+    )
+    assert resp.status_code == 200
+    assert "Threshold errors" in resp.text
+    assert "outside the 0–100 scale" in resp.text
+
+    # Verify NOT stored
+    from models import Decision
+
+    decision = db.query(Decision).filter(Decision.id == decision_id).first()
+    assert decision.thresholds is None or decision.thresholds == "null"
+
+
+def test_decision_apply_thresholds_invalid_non_numeric(client, db):
+    """POST threshold value 'abc' → error re-render with threshold_errors."""
+    decision_id, metric_id = _create_decision_with_metric(client, db)
+
+    resp = client.post(
+        f"/decisions/{decision_id}/thresholds",
+        data={
+            "threshold_metric_id_0": str(metric_id),
+            "threshold_op_0": "<=",
+            "threshold_val_0": "abc",
+        },
+    )
+    assert resp.status_code == 200
+    assert "Threshold errors" in resp.text
+    assert "must be a number" in resp.text
+
+    # Verify NOT stored
+    from models import Decision
+
+    decision = db.query(Decision).filter(Decision.id == decision_id).first()
+    assert decision.thresholds is None or decision.thresholds == "null"
+
+
+def test_decision_clear_thresholds(client, db):
+    """POST /thresholds/clear removes filters."""
+    decision_id, metric_id = _create_decision_with_metric(client, db)
+
+    from models import Decision
+
+    # Set a threshold first
+    decision = db.query(Decision).filter(Decision.id == decision_id).first()
+    import json
+
+    decision.thresholds = json.dumps(
+        [{"metric_id": metric_id, "operator": "<=", "value": 60.0}]
+    )
+    db.commit()
+
+    # Clear it
+    resp = client.post(
+        f"/decisions/{decision_id}/thresholds/clear",
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+
+    # Verify cleared
+    db.refresh(decision)
+    assert decision.thresholds is None
+
+
+def test_decision_thresholds_no_scores(client, db):
+    """Apply thresholds before scoring → all FAIL with 'No score available' reasons."""
+    decision_id, metric_id = _create_decision_with_metric(client, db)
+
+    # Apply valid threshold without any scores
+    resp = client.post(
+        f"/decisions/{decision_id}/thresholds",
+        data={
+            "threshold_metric_id_0": str(metric_id),
+            "threshold_op_0": "<=",
+            "threshold_val_0": "60",
+        },
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+
+    # Check result page
+    result = client.get(f"/decisions/{decision_id}/result")
+    assert result.status_code == 200
+    assert "No score available" in result.text
+    assert (
+        "Score your alternatives" in result.text
+        or "score" in result.text.lower()
+    )
+
+
+def test_decision_threshold_criteria_prepopulation(client, db):
+    """threshold_criteria contains expected operator/value pairs."""
+    decision_id, metric_id = _create_decision_with_metric(client, db)
+
+    from models import Metric
+
+    metric = db.query(Metric).filter(Metric.id == metric_id).first()
+    assert metric is not None
+
+    # Apply thresholds
+    client.post(
+        f"/decisions/{decision_id}/thresholds",
+        data={
+            "threshold_metric_id_0": str(metric_id),
+            "threshold_op_0": ">=",
+            "threshold_val_0": "75",
+        },
+        follow_redirects=False,
+    )
+
+    # Fetch result page
+    result = client.get(f"/decisions/{decision_id}/result")
+    assert result.status_code == 200
+
+    # Check that the metric name appears in the threshold panel
+    assert metric.name in result.text
+    # Check that the operator and value are in the page
+    assert ">=" in result.text
+    assert "75" in result.text

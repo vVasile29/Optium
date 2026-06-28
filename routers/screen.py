@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from database import get_db
 from models import Activity, ActivityWeight, AlternativeScore, Decision, Metric
-from services.parser import extract_thresholds
+from services.parser import extract_thresholds_detailed
 from services.scoring import (
     filter_by_thresholds,
     paired_t_test,
@@ -17,6 +17,10 @@ from services.scoring import (
 
 router = APIRouter(prefix="/screen", tags=["screen"])
 templates = Jinja2Templates(directory="templates")
+
+
+def safe_delete_redirect(redirect: str | None) -> str:
+    return redirect if redirect in {"/", "/screen"} else "/"
 
 
 @router.post("", response_class=HTMLResponse)
@@ -43,17 +47,18 @@ async def screen_create(request: Request, db: Session = Depends(get_db)):
             },
         )
 
-    # Extract thresholds from query
-    thresholds = extract_thresholds(query)
+    # Extract thresholds from query (with validation metadata)
+    detailed = extract_thresholds_detailed(query)
+    valid_thresholds = detailed["valid"]
 
     # Create Decision
     decision = Decision(query=query, category="General", mode="screen")
-    if thresholds:
+    if valid_thresholds:
         # Map metric names to IDs
         all_metrics = db.query(Metric).all()
         metric_map = {m.name: m for m in all_metrics}
         thresholds_with_ids = []
-        for t in thresholds:
+        for t in valid_thresholds:
             metric = metric_map.get(t["metric_name"])
             if metric:
                 thresholds_with_ids.append(
@@ -139,6 +144,9 @@ def screen_review(request: Request, decision_id: int, db: Session = Depends(get_
         except (json.JSONDecodeError, TypeError):
             pass
 
+    # Compute validation from the decision's query
+    validation = _compute_screen_validation(decision.query, metric_map)
+
     criteria = []
     for c in UNIVERSAL_METRICS:
         metric = metric_map.get(c["name"])
@@ -166,9 +174,42 @@ def screen_review(request: Request, decision_id: int, db: Session = Depends(get_
             "alternatives": alternatives,
             "criteria": criteria,
             "category": decision.category or "General",
+            "validation": validation,
             "active_page": "decisions",
         },
     )
+
+
+def _compute_screen_validation(query: str, metric_map: dict) -> dict:
+    """Compute screen validation metadata from a query string.
+
+    Returns a dict suitable for the template validation block:
+    {
+        "unknown_metrics": [...],
+        "out_of_range": [...],
+        "help_text": "..."
+    }
+    """
+    detailed = extract_thresholds_detailed(query)
+    unknown_metrics = [u["metric_name"] for u in detailed["unknown"]]
+    out_of_range = [
+        f"{o['metric_name']} {o['operator']} {o['value']} ({o['reason']})"
+        for o in detailed["out_of_range"]
+    ]
+    help_text = (
+        "Screen uses Pondera's 0–100 score scale. "
+        "Supported metrics: Cost, Value, Quality, Performance, "
+        "Time Required, Efficiency, Risk, Safety, Enjoyment, "
+        "Satisfaction, Convenience, Accessibility."
+    )
+    validation = {}
+    if unknown_metrics:
+        validation["unknown_metrics"] = unknown_metrics
+    if out_of_range:
+        validation["out_of_range"] = out_of_range
+    if unknown_metrics or out_of_range:
+        validation["help_text"] = help_text
+    return validation
 
 
 @router.post("/{decision_id}/refine", response_class=HTMLResponse)
@@ -194,6 +235,7 @@ async def screen_refine(
     # Parse metrics and thresholds
     metric_items = []
     thresholds_json = []
+    threshold_errors = []
     j = 0
     while f"metric_id_{j}" in form:
         metric_id_str = form.get(f"metric_id_{j}").strip()
@@ -209,21 +251,61 @@ async def screen_refine(
                 }
             )
 
-            # Collect threshold
+            # Collect threshold with validation
             t_op = form.get(f"threshold_op_{j}", "<=")
             t_val = form.get(f"threshold_val_{j}", "").strip()
             if t_val:
                 try:
-                    thresholds_json.append(
-                        {
-                            "metric_id": int(metric_id_str),
-                            "operator": t_op,
-                            "value": max(0.0, min(100.0, float(t_val))),
-                        }
-                    )
+                    t_val_float = float(t_val)
+                    if t_val_float < 0.0 or t_val_float > 100.0:
+                        threshold_errors.append(
+                            f"Threshold value {t_val_float} is outside the 0–100 scale."
+                        )
+                    else:
+                        thresholds_json.append(
+                            {
+                                "metric_id": int(metric_id_str),
+                                "operator": t_op,
+                                "value": t_val_float,
+                            }
+                        )
                 except ValueError:
-                    pass
+                    threshold_errors.append(
+                        f"Invalid threshold value '{t_val}' (must be a number)."
+                    )
         j += 1
+
+    # If threshold validation failed, re-render review with errors
+    if threshold_errors:
+        from services.ontology import UNIVERSAL_METRICS
+
+        all_metrics = db.query(Metric).order_by(Metric.category, Metric.name).all()
+        metric_map = {m.name: m for m in all_metrics}
+        criteria_with_ids = []
+        for c in UNIVERSAL_METRICS:
+            metric = metric_map.get(c["name"])
+            criteria_with_ids.append(
+                {
+                    **c,
+                    "id": metric.id if metric else None,
+                    "threshold_operator": "<=",
+                    "threshold_value": "",
+                }
+            )
+        validation = {"errors": threshold_errors}
+        return templates.TemplateResponse(
+            request,
+            "screen_review.html",
+            {
+                "request": request,
+                "decision": decision,
+                "alternatives": alternatives or ["Option A", "Option B"],
+                "criteria": criteria_with_ids,
+                "category": "General",
+                "validation": validation,
+                "active_page": "decisions",
+            },
+        )
 
     if not alternatives or not metric_items:
         from services.ontology import UNIVERSAL_METRICS
@@ -237,6 +319,8 @@ async def screen_refine(
                 {
                     **c,
                     "id": metric.id if metric else None,
+                    "threshold_operator": "<=",
+                    "threshold_value": "",
                 }
             )
         return templates.TemplateResponse(
@@ -249,6 +333,7 @@ async def screen_refine(
                 "criteria": criteria_with_ids,
                 "category": "General",
                 "error": "Please provide at least one alternative and select at least one criterion.",
+                "active_page": "decisions",
             },
         )
 
@@ -580,5 +665,5 @@ async def delete_screen(
     db.delete(decision)
     db.commit()
 
-    redirect = request.query_params.get("redirect", "/")
+    redirect = safe_delete_redirect(request.query_params.get("redirect"))
     return RedirectResponse(url=redirect, status_code=303)

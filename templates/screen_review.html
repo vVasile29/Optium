@@ -27,6 +27,33 @@
 </div>
 {% endif %}
 
+{% if validation %}
+<div class="alert" style="background: #fffbeb; color: #92400e; border: 1px solid #fde68a; border-radius: var(--radius-sm); padding: 0.75rem 1rem; margin-bottom: 1rem;">
+    {% if validation.get('unknown_metrics') %}
+    <p><strong>Unknown metrics:</strong> {{ validation.unknown_metrics|join(", ") }}</p>
+    {% endif %}
+    {% if validation.get('out_of_range') %}
+    <p><strong>Out-of-range thresholds:</strong></p>
+    <ul style="margin: 0.25rem 0 0.5rem 1.25rem;">
+        {% for item in validation.out_of_range %}
+        <li>{{ item }}</li>
+        {% endfor %}
+    </ul>
+    {% endif %}
+    {% if validation.get('errors') %}
+    <p><strong>Validation errors:</strong></p>
+    <ul style="margin: 0.25rem 0 0.5rem 1.25rem;">
+        {% for err in validation.errors %}
+        <li>{{ err }}</li>
+        {% endfor %}
+    </ul>
+    {% endif %}
+    {% if validation.get('help_text') %}
+    <p class="help-text" style="font-size: 0.8125rem; margin-top: 0.5rem;">{{ validation.help_text }}</p>
+    {% endif %}
+</div>
+{% endif %}
+
 <form action="/screen/{{ decision.id }}/refine" method="POST" x-data="screenForm()">
     <section class="section">
         <div class="section-header">
@@ -160,8 +187,8 @@ function screenForm() {
                 default_weight: {{ c.default_weight|tojson }},
                 higher_is_better: {% if c.higher_is_better is defined %}{{ c.higher_is_better|tojson }}{% else %}true{% endif %},
                 include: {% if c.include is defined and not c.include %}false{% else %}true{% endif %},
-                threshold_operator: '<=' ,
-                threshold_value: '' ,
+                threshold_operator: {{ c.threshold_operator|tojson }},
+                threshold_value: {{ c.threshold_value|tojson }},
             },
             {% endfor %}
         ],

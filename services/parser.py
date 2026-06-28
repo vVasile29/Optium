@@ -135,7 +135,7 @@ def extract_list(query: str) -> dict:
 
 
 def extract_thresholds(query: str) -> list[dict]:
-    """Detects per-criterion threshold constraints from free text.
+    """Detects per-criterion threshold constraints from free text. (Backward-compatible)
 
     Patterns:
       - "Cost <= 60", "cost < 30" (metric + operator + value)
@@ -238,6 +238,186 @@ def extract_thresholds(query: str) -> list[dict]:
                 )
 
     return results
+
+
+def extract_thresholds_detailed(query: str) -> dict:
+    """Extract thresholds with detailed validation metadata.
+
+    Like extract_thresholds() but returns structured information about
+    valid thresholds, unknown metric constraints, and out-of-range values.
+
+    Supports optional '%' suffix on numeric values (stripped before parsing).
+
+    Returns: {
+        "valid": [
+            {"metric_name": "Cost", "operator": "<=", "value": 60.0},
+        ],
+        "unknown": [
+            {"raw_text": "popularity > 100", "metric_name": "popularity",
+             "operator": ">", "value_str": "100"},
+        ],
+        "out_of_range": [
+            {"metric_name": "Quality", "operator": ">=", "value": 150.0,
+             "reason": "value > 100"},
+        ],
+    }
+    """
+    from services.ontology import UNIVERSAL_METRICS
+
+    metric_names = [m["name"] for m in UNIVERSAL_METRICS]
+
+    # Patterns with optional % suffix
+    patterns = [
+        # Pattern 1: "metric operator value" (e.g., "Cost <= 60%")
+        r"(?P<metric1>[A-Za-z ]+?)\s*(?P<op1><=|>=|<|>)\s*(?P<val1>\d+(?:\.\d+)?)\s*%?",
+        # Pattern 2: "at least / at most / minimum / maximum value metric" (e.g., "at least 80% quality")
+        r"(?P<keyword>at\s+least|at\s+most|minimum|maximum|min|max)\s+(?P<val2>\d+(?:\.\d+)?)\s*%?\s+(?P<metric2>[A-Za-z ]+)",
+        # Pattern 3: "keyword metric value" (e.g., "maximum cost 50%", "minimum quality 75%")
+        r"(?P<keyword3>at\s+least|at\s+most|minimum|maximum|min|max)\s+(?P<metric3>[A-Za-z ]+?)\s+(?P<val3>\d+(?:\.\d+)?)\s*%?",
+    ]
+
+    valid = []
+    unknown = []
+    out_of_range = []
+    seen = set()
+    seen_unknown = set()
+
+    def fuzzy_match(name: str) -> str | None:
+        """Fuzzy match a name against universal metric names."""
+        name_clean = name.strip().lower()
+        # Direct match
+        for mn in metric_names:
+            if mn.lower() == name_clean:
+                return mn
+        # Partial match (one contains the other)
+        for mn in metric_names:
+            if name_clean in mn.lower() or mn.lower() in name_clean:
+                return mn
+        return None
+
+    # Strip common connector words from raw metric names before matching
+    _CONNECTORS_RE = re.compile(r"^(?:and|or|&\s*)\s*", re.IGNORECASE)
+
+    # Pattern 1: metric operator value
+    for match in re.finditer(patterns[0], query, re.IGNORECASE):
+        raw_metric = _CONNECTORS_RE.sub("", match.group("metric1").strip()).strip()
+        op = match.group("op1")
+        val_str = match.group("val1")
+        val = float(val_str)
+        metric_name = fuzzy_match(raw_metric)
+        if metric_name:
+            if val < 0.0 or val > 100.0:
+                reason = "value < 0" if val < 0 else "value > 100"
+                out_of_range.append({
+                    "metric_name": metric_name,
+                    "operator": op,
+                    "value": val,
+                    "reason": reason,
+                })
+            else:
+                key = (metric_name, op, val)
+                if key not in seen:
+                    seen.add(key)
+                    valid.append({
+                        "metric_name": metric_name,
+                        "operator": op,
+                        "value": val,
+                    })
+        else:
+            raw_text = f"{raw_metric} {op} {val_str}"
+            unk_key = raw_text.lower()
+            if unk_key not in seen_unknown:
+                seen_unknown.add(unk_key)
+                unknown.append({
+                    "raw_text": raw_text,
+                    "metric_name": raw_metric,
+                    "operator": op,
+                    "value_str": val_str,
+                })
+
+    # Pattern 2: keyword value metric (e.g., "at least 80% quality")
+    for match in re.finditer(patterns[1], query, re.IGNORECASE):
+        keyword = match.group("keyword").lower().replace("at ", "").replace(" ", "")
+        raw_metric = match.group("metric2").strip()
+        val_str = match.group("val2")
+        val = float(val_str)
+        metric_name = fuzzy_match(raw_metric)
+        if metric_name:
+            op = ">=" if keyword in ("least", "minimum", "min") else "<="
+            if val < 0.0 or val > 100.0:
+                reason = "value < 0" if val < 0 else "value > 100"
+                out_of_range.append({
+                    "metric_name": metric_name,
+                    "operator": op,
+                    "value": val,
+                    "reason": reason,
+                })
+            else:
+                key = (metric_name, op, val)
+                if key not in seen:
+                    seen.add(key)
+                    valid.append({
+                        "metric_name": metric_name,
+                        "operator": op,
+                        "value": val,
+                    })
+        else:
+            op = ">=" if keyword in ("least", "minimum", "min") else "<="
+            raw_text = f"{keyword} {val_str} {raw_metric}"
+            unk_key = raw_text.lower()
+            if unk_key not in seen_unknown:
+                seen_unknown.add(unk_key)
+                unknown.append({
+                    "raw_text": raw_text,
+                    "metric_name": raw_metric,
+                    "operator": op,
+                    "value_str": val_str,
+                })
+
+    # Pattern 3: keyword metric value (e.g., "maximum cost 50%")
+    for match in re.finditer(patterns[2], query, re.IGNORECASE):
+        keyword = match.group("keyword3").lower().replace("at ", "").replace(" ", "")
+        raw_metric = match.group("metric3").strip()
+        val_str = match.group("val3")
+        val = float(val_str)
+        metric_name = fuzzy_match(raw_metric)
+        if metric_name:
+            op = ">=" if keyword in ("least", "minimum", "min") else "<="
+            if val < 0.0 or val > 100.0:
+                reason = "value < 0" if val < 0 else "value > 100"
+                out_of_range.append({
+                    "metric_name": metric_name,
+                    "operator": op,
+                    "value": val,
+                    "reason": reason,
+                })
+            else:
+                key = (metric_name, op, val)
+                if key not in seen:
+                    seen.add(key)
+                    valid.append({
+                        "metric_name": metric_name,
+                        "operator": op,
+                        "value": val,
+                    })
+        else:
+            op = ">=" if keyword in ("least", "minimum", "min") else "<="
+            raw_text = f"{keyword} {raw_metric} {val_str}"
+            unk_key = raw_text.lower()
+            if unk_key not in seen_unknown:
+                seen_unknown.add(unk_key)
+                unknown.append({
+                    "raw_text": raw_text,
+                    "metric_name": raw_metric,
+                    "operator": op,
+                    "value_str": val_str,
+                })
+
+    return {
+        "valid": valid,
+        "unknown": unknown,
+        "out_of_range": out_of_range,
+    }
 
 
 def parse_question(query: str) -> dict:

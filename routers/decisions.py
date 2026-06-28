@@ -1,3 +1,5 @@
+import json
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
@@ -5,7 +7,11 @@ from sqlalchemy.orm import Session
 
 from database import get_db
 from models import Activity, ActivityWeight, AlternativeScore, Decision, Metric
-from services.scoring import compute_alternative_fit_scores, paired_t_test
+from services.scoring import (
+    compute_alternative_fit_scores,
+    filter_by_thresholds,
+    paired_t_test,
+)
 
 router = APIRouter(prefix="/decisions", tags=["decisions"])
 templates = Jinja2Templates(directory="templates")
@@ -373,6 +379,56 @@ async def decision_result(
             if "error" in significance:
                 significance = None
 
+    # ── Threshold-based filtering (post-hoc) ──
+    filter_result = None
+    threshold_criteria = []
+    threshold_errors = []
+
+    # Build threshold_criteria for Alpine prepopulation
+    # Get all metrics that have ActivityWeight rows for this decision's activities
+    activity_ids = [a.id for a in activities]
+    metric_ids_with_weights = set()
+    if activity_ids:
+        for aw in (
+            db.query(ActivityWeight)
+            .filter(ActivityWeight.activity_id.in_(activity_ids))
+            .all()
+        ):
+            metric_ids_with_weights.add(aw.metric_id)
+
+    # Parse existing thresholds from decision JSON
+    existing_thresholds = []
+    if decision.thresholds:
+        try:
+            existing_thresholds = json.loads(decision.thresholds)
+        except (json.JSONDecodeError, TypeError):
+            existing_thresholds = []
+
+    existing_by_metric = {}
+    for t in existing_thresholds:
+        if isinstance(t, dict) and "metric_id" in t:
+            existing_by_metric[t["metric_id"]] = t
+
+    # Build threshold_criteria for all metrics with ActivityWeight rows
+    if metric_ids_with_weights:
+        metrics_in_use = (
+            db.query(Metric).filter(Metric.id.in_(metric_ids_with_weights)).all()
+        )
+        for m in metrics_in_use:
+            existing_t = existing_by_metric.get(m.id, {})
+            threshold_criteria.append(
+                {
+                    "id": m.id,
+                    "name": m.name,
+                    "operator": existing_t.get("operator", "<="),
+                    "value": existing_t.get("value", ""),
+                }
+            )
+
+    # Apply threshold filter if thresholds exist
+    if existing_thresholds:
+        filter_result = filter_by_thresholds(decision_id, db)
+
     return templates.TemplateResponse(
         request,
         "decision_result.html",
@@ -387,6 +443,9 @@ async def decision_result(
             "rows": rows,
             "results": results,
             "significance": significance,
+            "filter_result": filter_result,
+            "threshold_criteria": threshold_criteria,
+            "threshold_errors": threshold_errors,
             "active_page": "decisions",
         },
     )
@@ -487,3 +546,271 @@ async def delete_decision(
 
     redirect = safe_delete_redirect(request.query_params.get("redirect"))
     return RedirectResponse(url=redirect, status_code=303)
+
+
+@router.post("/{decision_id}/thresholds")
+async def apply_thresholds(
+    request: Request, decision_id: int, db: Session = Depends(get_db)
+):
+    """Apply threshold filters to a decision's result page.
+
+    Reads form data containing threshold operator/value pairs per metric,
+    validates them, stores valid entries in Decision.thresholds JSON,
+    and re-renders the result page with error feedback for invalid entries.
+    """
+    decision = db.query(Decision).filter(Decision.id == decision_id).first()
+    if not decision:
+        raise HTTPException(status_code=404, detail="Decision not found")
+
+    form = await request.form()
+
+    # Collect metric IDs with ActivityWeight rows
+    activities = db.query(Activity).filter(Activity.decision_id == decision_id).all()
+    activity_ids = [a.id for a in activities]
+    metric_ids_with_weights = set()
+    if activity_ids:
+        for aw in (
+            db.query(ActivityWeight)
+            .filter(ActivityWeight.activity_id.in_(activity_ids))
+            .all()
+        ):
+            metric_ids_with_weights.add(aw.metric_id)
+
+    thresholds_json = []
+    threshold_errors = []
+    j = 0
+
+    while f"threshold_metric_id_{j}" in form:
+        metric_id_str = form.get(f"threshold_metric_id_{j}").strip()
+        if not metric_id_str:
+            j += 1
+            continue
+        try:
+            metric_id = int(metric_id_str)
+        except (ValueError, TypeError):
+            j += 1
+            continue
+
+        if metric_id not in metric_ids_with_weights:
+            j += 1
+            continue
+
+        t_op = form.get(f"threshold_op_{j}", "<=")
+        t_val = form.get(f"threshold_val_{j}", "").strip()
+
+        if t_val:
+            try:
+                t_val_float = float(t_val)
+                if t_val_float < 0.0 or t_val_float > 100.0:
+                    threshold_errors.append(
+                        f"Threshold value {t_val_float} is outside the 0–100 scale."
+                    )
+                else:
+                    thresholds_json.append(
+                        {
+                            "metric_id": metric_id,
+                            "operator": t_op,
+                            "value": t_val_float,
+                        }
+                    )
+            except ValueError:
+                threshold_errors.append(
+                    f"Invalid threshold value '{t_val}' (must be a number)."
+                )
+        j += 1
+
+    if threshold_errors:
+        # Re-render result page with error messages, don't save
+        # Get existing context from decision_result
+        return await _render_result_with_threshold_errors(
+            request, decision_id, db, threshold_errors
+        )
+
+    # Store valid thresholds
+    if thresholds_json:
+        decision.thresholds = json.dumps(thresholds_json)
+    else:
+        decision.thresholds = None
+    db.commit()
+
+    return RedirectResponse(
+        url=f"/decisions/{decision_id}/result", status_code=303
+    )
+
+
+@router.post("/{decision_id}/thresholds/clear")
+async def clear_thresholds(
+    request: Request, decision_id: int, db: Session = Depends(get_db)
+):
+    """Clear all threshold filters for a decision."""
+    decision = db.query(Decision).filter(Decision.id == decision_id).first()
+    if not decision:
+        raise HTTPException(status_code=404, detail="Decision not found")
+
+    decision.thresholds = None
+    db.commit()
+
+    return RedirectResponse(
+        url=f"/decisions/{decision_id}/result", status_code=303
+    )
+
+
+async def _render_result_with_threshold_errors(
+    request: Request, decision_id: int, db: Session, threshold_errors: list[str]
+):
+    """Helper to re-render the result page with threshold errors."""
+    decision = db.query(Decision).filter(Decision.id == decision_id).first()
+    if not decision:
+        raise HTTPException(status_code=404, detail="Decision not found")
+
+    activities = db.query(Activity).filter(Activity.decision_id == decision_id).all()
+    activity_ids = [a.id for a in activities]
+    metric_ids = set()
+    if activity_ids:
+        for aw in (
+            db.query(ActivityWeight)
+            .filter(ActivityWeight.activity_id.in_(activity_ids))
+            .all()
+        ):
+            metric_ids.add(aw.metric_id)
+    metrics = (
+        db.query(Metric).filter(Metric.id.in_(metric_ids)).all() if metric_ids else []
+    )
+
+    results = compute_alternative_fit_scores(decision_id, db)
+
+    metric_names = [m.name for m in metrics]
+    higher_is_better = {m.id: m.higher_is_better for m in metrics}
+
+    series = []
+    for act in activities:
+        scores_map = {}
+        for alt_s in (
+            db.query(AlternativeScore)
+            .filter(AlternativeScore.activity_id == act.id)
+            .all()
+        ):
+            scores_map[alt_s.metric_id] = alt_s.score
+        series.append(
+            {
+                "name": act.name,
+                "scores": [scores_map.get(m.id, 0) for m in metrics],
+            }
+        )
+
+    rows = []
+    for m in metrics:
+        weight = 50
+        if activities:
+            aw = (
+                db.query(ActivityWeight)
+                .filter(
+                    ActivityWeight.activity_id == activities[0].id,
+                    ActivityWeight.metric_id == m.id,
+                )
+                .first()
+            )
+            if aw:
+                weight = aw.weight
+        row = {
+            "metric_name": m.name,
+            "metric_desc": m.description or "",
+            "weight": weight,
+            "scores": {},
+        }
+        for act in activities:
+            for alt_s in (
+                db.query(AlternativeScore)
+                .filter(
+                    AlternativeScore.activity_id == act.id,
+                    AlternativeScore.metric_id == m.id,
+                )
+                .all()
+            ):
+                row["scores"][act.id] = alt_s.score
+        rows.append(row)
+
+    significance = None
+    if len(results) >= 2:
+        top_1 = results[0]["activity_name"]
+        top_2 = results[1]["activity_name"]
+        scores_1 = None
+        scores_2 = None
+        for s in series:
+            if s["name"] == top_1:
+                scores_1 = s["scores"]
+            elif s["name"] == top_2:
+                scores_2 = s["scores"]
+        if scores_1 is not None and scores_2 is not None and len(scores_1) >= 2:
+            significance = paired_t_test(scores_1, scores_2)
+            if "error" in significance:
+                significance = None
+
+    # Build threshold_criteria from form values + stored thresholds
+    filter_result = None
+    if decision.thresholds:
+        try:
+            existing = json.loads(decision.thresholds)
+            if existing:
+                # Use the stored thresholds (before the error) if any exist
+                filter_result = filter_by_thresholds(decision_id, db)
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+    threshold_criteria = []
+    metric_ids_with_weights = set()
+    if activity_ids:
+        for aw in (
+            db.query(ActivityWeight)
+            .filter(ActivityWeight.activity_id.in_(activity_ids))
+            .all()
+        ):
+            metric_ids_with_weights.add(aw.metric_id)
+
+    existing_thresholds = []
+    if decision.thresholds:
+        try:
+            existing_thresholds = json.loads(decision.thresholds)
+        except (json.JSONDecodeError, TypeError):
+            existing_thresholds = []
+
+    existing_by_metric = {}
+    for t in existing_thresholds:
+        if isinstance(t, dict) and "metric_id" in t:
+            existing_by_metric[t["metric_id"]] = t
+
+    if metric_ids_with_weights:
+        metrics_in_use = (
+            db.query(Metric).filter(Metric.id.in_(metric_ids_with_weights)).all()
+        )
+        for m in metrics_in_use:
+            existing_t = existing_by_metric.get(m.id, {})
+            threshold_criteria.append(
+                {
+                    "id": m.id,
+                    "name": m.name,
+                    "operator": existing_t.get("operator", "<="),
+                    "value": existing_t.get("value", ""),
+                }
+            )
+
+    return templates.TemplateResponse(
+        request,
+        "decision_result.html",
+        {
+            "request": request,
+            "decision": decision,
+            "activities": activities,
+            "metrics": metrics,
+            "metric_names": metric_names,
+            "higher_is_better": higher_is_better,
+            "series": series,
+            "rows": rows,
+            "results": results,
+            "significance": significance,
+            "filter_result": filter_result,
+            "threshold_criteria": threshold_criteria,
+            "threshold_errors": threshold_errors,
+            "active_page": "decisions",
+        },
+    )

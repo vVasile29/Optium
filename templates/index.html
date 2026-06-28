@@ -9,10 +9,8 @@
             <p class="hero-subtitle">Turn a messy question into a weighted scoring matrix with universal criteria, clear tradeoffs, and a defensible winner.</p>
 
             <div class="mode-picker" role="group" aria-label="Decision mode">
-                <button type="button" class="mode-pill" :class="{ active: mode === 'choose' }" :aria-pressed="(mode === 'choose').toString()" @click="setMode('choose')">Compare</button>
+                <button type="button" class="mode-pill" :class="{ active: mode === '' }" :aria-pressed="(mode === '').toString()" @click="setMode('')">Compare / Rank</button>
                 <button type="button" class="mode-pill" :class="{ active: mode === 'diagnose' }" :aria-pressed="(mode === 'diagnose').toString()" @click="setMode('diagnose')">Diagnose</button>
-                <button type="button" class="mode-pill" :class="{ active: mode === 'screen' }" :aria-pressed="(mode === 'screen').toString()" @click="setMode('screen')">Screen</button>
-                <button type="button" class="mode-pill" :class="{ active: mode === 'rank' }" :aria-pressed="(mode === 'rank').toString()" @click="setMode('rank')">Rank</button>
             </div>
 
             {% if error %}
@@ -70,7 +68,7 @@
 <section class="credibility-band" aria-label="Methodology highlights">
     <div><strong>12</strong><span>universal metrics</span></div>
     <div><strong>6</strong><span>value dimensions</span></div>
-    <div><strong>4</strong><span>decision workflows</span></div>
+    <div><strong>2</strong><span>decision workflows</span></div>
     <div><strong>0–100</strong><span>weighted scoring</span></div>
 </section>
 
@@ -108,10 +106,9 @@
         <h2>One engine, multiple decision modes</h2>
     </div>
     <div class="use-case-grid">
-        <div class="use-case-card"><span class="badge badge-choose">Compare</span><p>“Should I buy a house or an apartment?”</p></div>
+        <div class="use-case-card"><span class="badge badge-choose">Compare / Rank</span><p>“Should I buy a house or an apartment?” or “Rank Python, Java, Go”</p></div>
         <div class="use-case-card"><span class="badge badge-diagnose">Diagnose</span><p>“How good is a Tesla for commuting?”</p></div>
-        <div class="use-case-card"><span class="badge badge-screen">Screen</span><p>“Screen jobs by cost &lt; 60 and quality &gt; 70.”</p></div>
-        <div class="use-case-card"><span class="badge badge-rank">Rank</span><p>“Rank Python, Java, Go.”</p></div>
+        
     </div>
 </section>
 
@@ -158,16 +155,14 @@
 <script>
 function categoryPicker() {
     const placeholders = {
-        choose: 'e.g. "Should I buy a house or an apartment?"',
+        '': 'e.g. "Should I buy a house or an apartment?" or "Rank Python, Java, Go"',
         diagnose: 'e.g. "How good is a Tesla for commuting?"',
-        screen: 'e.g. "Screen jobs by cost < 60 and quality > 70"',
-        rank: 'e.g. "Rank Python, Java, Go"'
     };
     const examples = {
-        choose: {
-            label: 'Compare',
+        '': {
+            label: 'Compare / Rank',
             badgeClass: 'badge-choose',
-            summary: 'Weighted comparison',
+            summary: 'Weighted comparison or ranking',
             title: 'House vs Apartment',
             alternatives: ['House', 'Apartment'],
             rows: [
@@ -192,45 +187,17 @@ function categoryPicker() {
             calloutLabel: 'Gap analysis',
             callout: 'Strong performance; review cost'
         },
-        screen: {
-            label: 'Screen',
-            badgeClass: 'badge-screen',
-            summary: 'Threshold filtering',
-            title: 'Job offers by minimum criteria',
-            alternatives: ['Offer A', 'Offer B', 'Offer C'],
-            rows: [
-                { name: 'Cost ≤ 60', scores: [55, 72, 48] },
-                { name: 'Quality ≥ 70', scores: [78, 82, 66] },
-                { name: 'Risk ≤ 50', scores: [44, 38, 57] }
-            ],
-            calloutLabel: 'Screen result',
-            callout: 'Offer A passes all thresholds'
-        },
-        rank: {
-            label: 'Rank',
-            badgeClass: 'badge-rank',
-            summary: 'Multi-option ranking',
-            title: 'Python, Java, Go',
-            alternatives: ['Python', 'Java', 'Go'],
-            rows: [
-                { name: 'Performance', scores: [82, 86, 91] },
-                { name: 'Accessibility', scores: [94, 78, 74] },
-                { name: 'Efficiency', scores: [80, 76, 88] }
-            ],
-            calloutLabel: 'Top ranked',
-            callout: 'Python · 86%'
-        }
     };
     return {
-        mode: 'choose',
-        placeholder: placeholders.choose,
+        mode: '',
+        placeholder: placeholders[''],
         examples,
         get example() {
-            return this.examples[this.mode] || this.examples.choose;
+            return this.examples[this.mode] || this.examples[''];
         },
         setMode(nextMode) {
             this.mode = nextMode;
-            this.placeholder = placeholders[nextMode] || placeholders.choose;
+            this.placeholder = placeholders[nextMode] || placeholders[''];
         }
     };
 }

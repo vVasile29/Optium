@@ -16,8 +16,110 @@
 </div>
 
 {% if results %}
+
+{# ── Threshold filter panel ── #}
+<section class="section" x-data="thresholdPanel()">
+    <div class="section-header">
+        <h2>
+            <button type="button" @click="showPanel = !showPanel" style="background: none; border: none; cursor: pointer; font-size: inherit; font-weight: inherit; color: inherit; padding: 0;">
+                <span x-text="showPanel ? 'Hide Filters' : 'Filter by Thresholds'"></span>
+                <span x-text="showPanel ? '▲' : '▼'" style="font-size: 0.75rem; margin-left: 0.5rem;"></span>
+            </button>
+        </h2>
+    </div>
+
+    {% if threshold_errors %}
+    <div class="alert alert-danger" role="alert">
+        <strong>Threshold errors:</strong>
+        <ul>
+        {% for e in threshold_errors %}
+            <li>{{ e }}</li>
+        {% endfor %}
+        </ul>
+    </div>
+    {% endif %}
+
+    <div x-show="showPanel" x-transition:enter.duration.200ms>
+        <form action="/decisions/{{ decision.id }}/thresholds" method="POST">
+            <template x-for="(c, idx) in criteria" :key="c.id">
+                <div style="display: flex; gap: 0.5rem; align-items: center; margin-bottom: 0.5rem; flex-wrap: wrap;">
+                    <input type="hidden" x-bind:name="'threshold_metric_id_' + idx" x-bind:value="c.id">
+                    <strong x-text="c.name" style="min-width: 120px;"></strong>
+                    <select x-bind:name="'threshold_op_' + idx" x-model="c.operator" style="padding: 0.25rem 0.5rem; border: 1px solid var(--border); border-radius: var(--radius-sm);">
+                        <option value="<=">&lt;=</option>
+                        <option value=">=">&gt;=</option>
+                        <option value="<">&lt;</option>
+                        <option value=">">&gt;</option>
+                    </select>
+                    <input type="number" x-bind:name="'threshold_val_' + idx" x-model.number="c.value" min="0" max="100" step="1" placeholder="Value" style="width: 80px; padding: 0.25rem 0.5rem; border: 1px solid var(--border); border-radius: var(--radius-sm);">
+                    <span class="text-muted" style="font-size: 0.75rem;">0–100</span>
+                </div>
+            </template>
+            <div style="display: flex; gap: 0.5rem; margin-top: 1rem;">
+                <button type="submit" class="btn btn-primary btn-sm">Apply Filters</button>
+            </div>
+        </form>
+        <form action="/decisions/{{ decision.id }}/thresholds/clear" method="POST" style="display: block; margin-top: 0.5rem;">
+            <button type="submit" class="btn btn-secondary btn-sm"
+                    x-bind:disabled="!hasActiveFilter">Clear Filters</button>
+        </form>
+
+        {% if filter_result and filter_result.failed|length > 0 and filter_result.passed|length == 0 and filter_result.survivor_results|length == 0 %}
+        <div class="alert alert-info" role="alert" style="margin-top: 1rem;">
+            All alternatives fail thresholds because no scores have been entered yet.
+            <a href="/decisions/{{ decision.id }}/score">Score your alternatives</a> first, then apply thresholds.
+        </div>
+        {% endif %}
+    </div>
+</section>
+
+{# ── PASS / FAIL badges (when filter is active) ── #}
+{% if filter_result %}
 <section class="section">
-    <h2>Ranking</h2>
+    <div class="section-header">
+        <h2>Pass / Fail</h2>
+    </div>
+
+    {% if filter_result.all_passed and filter_result.passed %}
+    <div class="insight-callout" style="border-left: 4px solid var(--success);">
+        All alternatives meet your thresholds.
+    </div>
+    {% elif filter_result.passed|length == 0 %}
+    <div class="insight-callout" style="border-left: 4px solid var(--danger);">
+        None of your alternatives meet all thresholds.
+    </div>
+    {% endif %}
+
+    <div style="display: flex; flex-direction: column; gap: 0.5rem;">
+        {% for p in filter_result.passed %}
+        <div class="ranked-item" style="border-left: 4px solid var(--success);">
+            <span style="color: var(--success); font-weight: 700; font-size: 0.75rem; min-width: 40px;">PASS</span>
+            <div class="ranked-info">
+                <strong>{{ p.activity_name }}</strong>
+            </div>
+        </div>
+        {% endfor %}
+
+        {% for f in filter_result.failed %}
+        <div class="ranked-item" style="border-left: 4px solid var(--danger);">
+            <span style="color: var(--danger); font-weight: 700; font-size: 0.75rem; min-width: 40px;">FAIL</span>
+            <div class="ranked-info">
+                <strong>{{ f.activity_name }}</strong>
+                <div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.25rem;">
+                    {% for reason in f.reasons %}
+                    <div>• {{ reason }}</div>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</section>
+{% endif %}
+
+{# ── Ranking / Survivor Ranking ── #}
+<section class="section">
+    <h2>{% if filter_result and filter_result.survivor_results %}Survivor Ranking (filtered){% else %}Ranking{% endif %}</h2>
     <div class="ranked-list">
         {% for r in results %}
         <div class="ranked-item">
@@ -131,6 +233,26 @@
 </section>
 
 <script>
+function thresholdPanel() {
+    return {
+        showPanel: {{ 'true' if filter_result else 'false' }},
+        criteria: [
+            {% for c in threshold_criteria %}
+            {
+                id: {{ c.id }},
+                name: {{ c.name|tojson }},
+                operator: {{ c.operator|tojson }},
+                value: {{ c.value|tojson }},
+            },
+            {% endfor %}
+        ],
+        get hasActiveFilter() {
+            return this.criteria.some(c => c.value !== '' && c.value !== null && c.value !== undefined);
+        },
+
+    };
+}
+
 document.addEventListener('DOMContentLoaded', function() {
     const ctx = document.getElementById('radarChart').getContext('2d');
 

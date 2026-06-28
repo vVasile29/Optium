@@ -1,4 +1,5 @@
 import json
+import logging
 import math
 
 from sqlalchemy.orm import Session
@@ -72,8 +73,13 @@ def filter_by_thresholds(decision_id: int, db: Session) -> dict:
             operator = t.get("operator", "<=")
             threshold_value = float(t.get("value", 0))
 
-            # Clamp threshold value to 0-100
-            threshold_value = max(0.0, min(100.0, threshold_value))
+            # Validate threshold value — clamp with warning if out of range
+            if threshold_value < 0.0 or threshold_value > 100.0:
+                logging.warning(
+                    "filter_by_thresholds: threshold value %s out of range for metric %s — clamped to 0-100",
+                    threshold_value, metric_id
+                )
+                threshold_value = max(0.0, min(100.0, threshold_value))
 
             # Skip unknown metric_ids
             if metric_id not in metric_map:
