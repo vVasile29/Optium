@@ -1,7 +1,7 @@
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Depends, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from database import Base, engine, get_db
 from routers import metrics
 from routers.decisions import router as decisions_router
+from routers.evaluate import router as evaluate_router
 from services.parser import parse_question
 
 
@@ -20,6 +21,7 @@ async def lifespan(app: FastAPI):
     from services.ontology import UNIVERSAL_DIMENSIONS
     from models import Metric
     from database import SessionLocal
+
     db = SessionLocal()
     try:
         existing = db.query(Metric).count()
@@ -47,11 +49,13 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 # Include routers
 app.include_router(metrics.router)
 app.include_router(decisions_router)
+app.include_router(evaluate_router)
 
 templates = Jinja2Templates(directory="templates")
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
 
 
@@ -60,6 +64,13 @@ def index(request: Request, db: Session = Depends(get_db)):
     from models import Decision
 
     decisions = db.query(Decision).order_by(Decision.created_at.desc()).all()
+    for d in decisions:
+        mode = d.mode if hasattr(d, "mode") and d.mode else "choose"
+        d.result_url = (
+            f"/evaluate/{d.id}/result"
+            if mode == "diagnose"
+            else f"/decisions/{d.id}/result"
+        )
     return templates.TemplateResponse(
         request,
         "index.html",
@@ -88,23 +99,52 @@ async def decide(request: Request, db: Session = Depends(get_db)):
             },
         )
 
-    # Parse the question
+    # Parse the question — try CHOOSE first
     parsed = parse_question(query)
     alternatives = parsed["alternatives"]
     criteria_list = parsed["criteria"]
     category = parsed["category"]
     is_parsed = parsed["parsed"]
 
-    # Get all global metrics
+    # If CHOOSE didn't find alternatives, try DIAGNOSE parsing
+    if not is_parsed:
+        from services.parser import extract_subject
+        diag = extract_subject(query)
+        if diag["parsed"]:
+            # Route as DIAGNOSE
+            from services.ontology import UNIVERSAL_METRICS
+
+            decision = Decision(query=query, category="General", mode="diagnose")
+            db.add(decision)
+            db.flush()
+
+            subject = diag["subject"]
+            activity = Activity(name=subject, category="General", decision_id=decision.id)
+            db.add(activity)
+            db.flush()
+
+            all_metrics = db.query(Metric).all()
+            metric_map = {m.name: m for m in all_metrics}
+            for m in UNIVERSAL_METRICS:
+                metric = metric_map.get(m["name"])
+                if metric:
+                    aw = ActivityWeight(
+                        activity_id=activity.id,
+                        metric_id=metric.id,
+                        weight=m["default_weight"],
+                    )
+                    db.add(aw)
+            db.commit()
+            return RedirectResponse(url=f"/evaluate/{decision.id}/review", status_code=303)
+
+    # Continue as CHOOSE
     all_metrics = db.query(Metric).all()
     metric_map = {m.name: m for m in all_metrics}
 
-    # Create the Decision record
     decision = Decision(query=query, category=category)
     db.add(decision)
     db.flush()
 
-    # Create Activity records for each alternative
     for alt_name in alternatives:
         activity = Activity(
             name=alt_name,
@@ -114,7 +154,6 @@ async def decide(request: Request, db: Session = Depends(get_db)):
         db.add(activity)
         db.flush()
 
-        # Create ActivityWeight records for each (activity, metric) pair
         for crit in criteria_list:
             metric = metric_map.get(crit["name"])
             if metric:
@@ -127,14 +166,15 @@ async def decide(request: Request, db: Session = Depends(get_db)):
 
     db.commit()
 
-    # Enrich criteria_list with database IDs for the template
     criteria_with_ids = []
     for c in criteria_list:
         metric = metric_map.get(c["name"])
-        criteria_with_ids.append({
-            **c,
-            "id": metric.id if metric else None,
-        })
+        criteria_with_ids.append(
+            {
+                **c,
+                "id": metric.id if metric else None,
+            }
+        )
 
     return templates.TemplateResponse(
         request,

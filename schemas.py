@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 
 # ── Decision ──
 
+
 class DecisionCreate(BaseModel):
     query: str
 
@@ -27,6 +28,7 @@ class DecisionReview(BaseModel):
 
 
 # ── Metric ──
+
 
 class MetricBase(BaseModel):
     name: str
@@ -66,6 +68,7 @@ class SubMetricCreate(BaseModel):
 
 # ── Activity ──
 
+
 class ActivityBase(BaseModel):
     name: str
     category: str
@@ -91,6 +94,7 @@ class ActivityOut(ActivityBase):
 
 # ── ActivityWeight ──
 
+
 class WeightItem(BaseModel):
     metric_id: int
     weight: float = Field(ge=0.0, le=100.0)
@@ -111,6 +115,7 @@ class ActivityWeightOut(BaseModel):
 
 
 # ── Alternative Score ──
+
 
 class AlternativeScoreCreate(BaseModel):
     activity_id: int

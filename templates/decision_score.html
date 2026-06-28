@@ -7,7 +7,7 @@
         <p class="text-muted">{{ decision.query }}</p>
     </div>
     <div class="detail-actions">
-        <a href="/decisions/{{ decision.id }}/review" class="btn btn-secondary">← Back to Criteria</a>
+        <a href="{{ back_url | default('/decisions/' ~ decision.id ~ '/review') }}" class="btn btn-secondary">← Back to Criteria</a>
         <form action="/decisions/{{ decision.id }}/delete" method="POST" style="display: inline;" onsubmit="return confirm('Delete this decision and all its data?')">
             <button type="submit" class="btn btn-danger">Delete</button>
         </form>
@@ -16,11 +16,11 @@
 
 {% if already_scored %}
 <div class="alert alert-success">
-    Scores found! <a href="/decisions/{{ decision.id }}/result">View results</a> or re-score below.
+    Scores found! <a href="{{ result_url | default('/decisions/' ~ decision.id ~ '/result') }}">View results</a> or re-score below.
 </div>
 {% endif %}
 
-<form action="/decisions/{{ decision.id }}/score" method="POST" x-data="scoreForm()">
+<form action="{{ score_url | default('/decisions/' ~ decision.id ~ '/score') }}" method="POST" x-data="scoreForm()">
     <section class="section">
         <div class="section-header">
             <h2>Rate each alternative on every criterion</h2>

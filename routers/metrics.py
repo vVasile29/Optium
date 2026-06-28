@@ -34,9 +34,7 @@ def list_metrics(request: Request, db: Session = Depends(get_db)):
                 "unit": m.unit,
                 "higher_is_better": m.higher_is_better,
                 "parent_id": m.parent_id,
-                "children": [
-                    {"id": c.id, "name": c.name} for c in children
-                ],
+                "children": [{"id": c.id, "name": c.name} for c in children],
                 "is_sub_metric": m.parent_id is not None,
             }
         )
@@ -65,9 +63,7 @@ def create_metric(data: MetricCreate, db: Session = Depends(get_db)):
 
 
 @router.put("/metrics/{metric_id}")
-def update_metric(
-    metric_id: int, data: MetricUpdate, db: Session = Depends(get_db)
-):
+def update_metric(metric_id: int, data: MetricUpdate, db: Session = Depends(get_db)):
     metric = db.query(Metric).filter(Metric.id == metric_id).first()
     if not metric:
         raise HTTPException(status_code=404, detail="Metric not found")
@@ -86,9 +82,7 @@ def delete_metric(metric_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Metric not found")
 
     # Delete related activity weights
-    db.query(ActivityWeight).filter(
-        ActivityWeight.metric_id == metric_id
-    ).delete()
+    db.query(ActivityWeight).filter(ActivityWeight.metric_id == metric_id).delete()
 
     # Delete sub-metrics first
     db.query(Metric).filter(Metric.parent_id == metric_id).delete()
@@ -125,6 +119,3 @@ def add_sub_metric(
     db.commit()
     db.refresh(sub)
     return {"id": sub.id, "name": sub.name, "parent_id": sub.parent_id}
-
-
-

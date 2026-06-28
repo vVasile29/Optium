@@ -5,139 +5,89 @@ from sqlalchemy.orm import Session
 
 from database import get_db
 from models import Activity, ActivityWeight, AlternativeScore, Decision, Metric
-from services.scoring import compute_alternative_fit_scores, paired_t_test
+from services.parser import extract_subject
+from services.scoring import (
+    compute_alternative_fit_scores,
+    compute_dimension_scores,
+    gap_analysis,
+)
 
-router = APIRouter(prefix="/decisions", tags=["decisions"])
+router = APIRouter(prefix="/evaluate", tags=["evaluate"])
 templates = Jinja2Templates(directory="templates")
 
 
-@router.get("", response_class=HTMLResponse)
-def list_decisions(request: Request, db: Session = Depends(get_db)):
-    decisions = db.query(Decision).order_by(Decision.created_at.desc()).all()
-    return templates.TemplateResponse(
-        request,
-        "index.html",
-        {"request": request, "decisions": decisions, "active_page": "home"},
-    )
-
-
-@router.post("/{decision_id}/refine", response_class=HTMLResponse)
-async def refine_decision(
-    request: Request, decision_id: int, db: Session = Depends(get_db)
-):
-    decision = db.query(Decision).filter(Decision.id == decision_id).first()
-    if not decision:
-        raise HTTPException(status_code=404, detail="Decision not found")
+@router.post("", response_class=HTMLResponse)
+async def evaluate(request: Request, db: Session = Depends(get_db)):
+    """Entry point — parse query, create decision + activity, redirect to review."""
+    from services.ontology import UNIVERSAL_METRICS
 
     form = await request.form()
+    query = form.get("q", "").strip()
 
-    # Parse alternative names (alt_name_0, alt_name_1, ...)
-    alternatives = []
-    i = 0
-    while f"alt_name_{i}" in form:
-        name = form.get(f"alt_name_{i}").strip()
-        if name:
-            alternatives.append(name)
-        i += 1
+    if not query:
+        from models import Decision as DecModel
 
-    # Parse metrics: form sends metric_id_{j}, criterion_weight_{j}, criterion_higher_{j}
-    # Only include metrics where include_metric_{j} is present
-    metric_items = []
-    j = 0
-    while f"metric_id_{j}" in form:
-        metric_id_str = form.get(f"metric_id_{j}").strip()
-        include = form.get(f"include_metric_{j}", "false")
-        # Accept both "true" (Alpine.js model) and "on" (native HTML form submission)
-        if metric_id_str and include in ("true", "on"):
-            weight_str = form.get(f"criterion_weight_{j}", "50")
-            higher_str = form.get(f"criterion_higher_{j}", "true")
-            metric_items.append(
-                {
-                    "metric_id": int(metric_id_str),
-                    "default_weight": float(weight_str),
-                    "higher_is_better": higher_str == "true",
-                }
-            )
-        j += 1
-
-    if not alternatives or not metric_items:
-        # Re-render with error — enrich metrics with DB IDs
-        from services.ontology import UNIVERSAL_METRICS
-
-        all_metrics = db.query(Metric).order_by(Metric.category, Metric.name).all()
-        metric_map = {m.name: m for m in all_metrics}
-        criteria_with_ids = []
-        for c in UNIVERSAL_METRICS:
-            metric = metric_map.get(c["name"])
-            criteria_with_ids.append(
-                {
-                    **c,
-                    "id": metric.id if metric else None,
-                }
-            )
+        decisions = db.query(DecModel).order_by(DecModel.created_at.desc()).all()
         return templates.TemplateResponse(
             request,
-            "decision_review.html",
+            "index.html",
             {
                 "request": request,
-                "decision": decision,
-                "alternatives": alternatives or ["Option A", "Option B"],
-                "criteria": criteria_with_ids,
-                "category": "General",
-                "error": "Please provide at least one alternative and select at least one criterion.",
+                "decisions": decisions,
+                "query": query,
+                "error": "Please enter a question.",
+                "active_page": "home",
             },
         )
 
-    # Delete old activities and their weights/scores
-    for activity in decision.activities:
-        db.query(ActivityWeight).filter(
-            ActivityWeight.activity_id == activity.id
-        ).delete()
-        db.query(AlternativeScore).filter(
-            AlternativeScore.activity_id == activity.id
-        ).delete()
-        db.delete(activity)
+    parsed = extract_subject(query)
+    subject = parsed["subject"]
+
+    # Create the Decision record with mode='diagnose'
+    decision = Decision(query=query, category="General", mode="diagnose")
+    db.add(decision)
     db.flush()
 
-    # Create activities for each alternative
-    for alt_name in alternatives:
-        activity = Activity(
-            name=alt_name,
-            category=decision.category if hasattr(decision, "category") else "General",
-            decision_id=decision_id,
-        )
-        db.add(activity)
-        db.flush()
+    # Create a single Activity for the subject
+    activity = Activity(
+        name=subject,
+        category="General",
+        decision_id=decision.id,
+    )
+    db.add(activity)
+    db.flush()
 
-        # Create weight rows for each selected metric
-        for mitem in metric_items:
+    # Create ActivityWeight records for all universal metrics (default weights)
+    all_metrics = db.query(Metric).all()
+    metric_map = {m.name: m for m in all_metrics}
+
+    for m in UNIVERSAL_METRICS:
+        metric = metric_map.get(m["name"])
+        if metric:
             aw = ActivityWeight(
                 activity_id=activity.id,
-                metric_id=mitem["metric_id"],
-                weight=mitem["default_weight"],
+                metric_id=metric.id,
+                weight=m["default_weight"],
             )
             db.add(aw)
 
     db.commit()
 
-    # Redirect to scoring page
-    return RedirectResponse(url=f"/decisions/{decision_id}/score", status_code=303)
+    return RedirectResponse(url=f"/evaluate/{decision.id}/review", status_code=303)
 
 
 @router.get("/{decision_id}/review", response_class=HTMLResponse)
-def review_decision(request: Request, decision_id: int, db: Session = Depends(get_db)):
-    """Review/refine page — edit alternatives and select criteria."""
+def evaluate_review(request: Request, decision_id: int, db: Session = Depends(get_db)):
+    """Review/edit page — shows subject name and criteria selection."""
     decision = db.query(Decision).filter(Decision.id == decision_id).first()
     if not decision:
-        raise HTTPException(status_code=404, detail="Decision not found")
+        raise HTTPException(status_code=404, detail="Evaluation not found")
 
     from services.ontology import UNIVERSAL_METRICS
 
-    # Get existing activities (previously saved alternatives)
+    # Get existing activity
     activities = db.query(Activity).filter(Activity.decision_id == decision_id).all()
-    alternatives = (
-        [a.name for a in activities] if activities else ["Option A", "Option B"]
-    )
+    subject = activities[0].name if activities else "This option"
 
     # Get all metrics with DB IDs
     all_metrics_db = db.query(Metric).order_by(Metric.category, Metric.name).all()
@@ -147,14 +97,12 @@ def review_decision(request: Request, decision_id: int, db: Session = Depends(ge
     selected_metric_ids = set()
     weights_by_metric_id = {}
     if activities:
-        activity_ids = [a.id for a in activities]
         for aw in (
             db.query(ActivityWeight)
-            .filter(ActivityWeight.activity_id.in_(activity_ids))
+            .filter(ActivityWeight.activity_id == activities[0].id)
             .all()
         ):
             selected_metric_ids.add(aw.metric_id)
-            # Use the weight from the first activity (all share same weight by design)
             weights_by_metric_id[aw.metric_id] = aw.weight
 
     criteria = []
@@ -172,220 +120,133 @@ def review_decision(request: Request, decision_id: int, db: Session = Depends(ge
             }
         )
 
-    parsed = len(activities) >= 2
+    # Extract goal from query using extract_subject
+    parsed = extract_subject(decision.query)
 
     return templates.TemplateResponse(
         request,
-        "decision_review.html",
+        "evaluate_review.html",
         {
             "request": request,
             "decision": decision,
-            "alternatives": alternatives,
+            "subject": subject,
+            "goal": parsed["goal"],
             "criteria": criteria,
             "category": decision.category or "General",
-            "parsed": parsed,
+            "parsed": parsed["parsed"],
             "active_page": "decisions",
         },
     )
 
 
-@router.post("/{decision_id}/score", response_class=HTMLResponse)
-async def score_decision(
+@router.post("/{decision_id}/refine", response_class=HTMLResponse)
+async def evaluate_refine(
     request: Request, decision_id: int, db: Session = Depends(get_db)
 ):
+    """Save criteria choices and update subject name."""
     decision = db.query(Decision).filter(Decision.id == decision_id).first()
     if not decision:
-        raise HTTPException(status_code=404, detail="Decision not found")
+        raise HTTPException(status_code=404, detail="Evaluation not found")
 
     form = await request.form()
 
-    activities = db.query(Activity).filter(Activity.decision_id == decision_id).all()
+    # Parse subject name
+    subject = form.get("alt_name_0", "").strip()
+    if not subject:
+        subject = "This option"
 
-    # Get metrics from ActivityWeight for this decision's activities
-    activity_ids = [a.id for a in activities]
-    metric_ids = set()
-    if activity_ids:
-        for aw in (
-            db.query(ActivityWeight)
-            .filter(ActivityWeight.activity_id.in_(activity_ids))
-            .all()
-        ):
-            metric_ids.add(aw.metric_id)
-    metrics = (
-        db.query(Metric).filter(Metric.id.in_(metric_ids)).all() if metric_ids else []
-    )
+    # Parse metrics
+    metric_items = []
+    j = 0
+    while f"metric_id_{j}" in form:
+        metric_id_str = form.get(f"metric_id_{j}").strip()
+        include = form.get(f"include_metric_{j}", "false")
+        if metric_id_str and include in ("true", "on"):
+            weight_str = form.get(f"criterion_weight_{j}", "50")
+            higher_str = form.get(f"criterion_higher_{j}", "true")
+            metric_items.append(
+                {
+                    "metric_id": int(metric_id_str),
+                    "default_weight": float(weight_str),
+                    "higher_is_better": higher_str == "true",
+                }
+            )
+        j += 1
 
-    # Delete old alternative scores
-    for activity in activities:
-        db.query(AlternativeScore).filter(
-            AlternativeScore.activity_id == activity.id
-        ).delete()
-    db.flush()
+    if not metric_items:
+        from services.ontology import UNIVERSAL_METRICS
 
-    # Parse scores from form: score_{activity_id}_{metric_id}
-    for activity in activities:
-        for metric in metrics:
-            key = f"score_{activity.id}_{metric.id}"
-            if key in form:
-                val = form.get(key)
-                if val and val.strip():
-                    score_val = float(val)
-                    alt_score = AlternativeScore(
-                        activity_id=activity.id,
-                        metric_id=metric.id,
-                        score=score_val,
-                    )
-                    db.add(alt_score)
-
-    db.commit()
-
-    # Redirect to results
-    return await decision_result(request, decision_id, db)
-
-
-@router.get("/{decision_id}/result", response_class=HTMLResponse)
-async def decision_result(
-    request: Request, decision_id: int, db: Session = Depends(get_db)
-):
-    decision = db.query(Decision).filter(Decision.id == decision_id).first()
-    if not decision:
-        raise HTTPException(status_code=404, detail="Decision not found")
-
-    activities = db.query(Activity).filter(Activity.decision_id == decision_id).all()
-
-    # Get metrics from ActivityWeight for this decision's activities
-    activity_ids = [a.id for a in activities]
-    metric_ids = set()
-    if activity_ids:
-        for aw in (
-            db.query(ActivityWeight)
-            .filter(ActivityWeight.activity_id.in_(activity_ids))
-            .all()
-        ):
-            metric_ids.add(aw.metric_id)
-    metrics = (
-        db.query(Metric).filter(Metric.id.in_(metric_ids)).all() if metric_ids else []
-    )
-
-    if not activities or not metrics:
+        all_metrics = db.query(Metric).order_by(Metric.category, Metric.name).all()
+        metric_map = {m.name: m for m in all_metrics}
+        criteria_with_ids = []
+        for c in UNIVERSAL_METRICS:
+            metric = metric_map.get(c["name"])
+            criteria_with_ids.append(
+                {
+                    **c,
+                    "id": metric.id if metric else None,
+                }
+            )
         return templates.TemplateResponse(
             request,
-            "decision_result.html",
+            "evaluate_review.html",
             {
                 "request": request,
                 "decision": decision,
-                "results": [],
-                "metric_names": [],
-                "series": [],
-                "active_page": "decisions",
+                "subject": subject,
+                "goal": extract_subject(decision.query).get("goal"),
+                "criteria": criteria_with_ids,
+                "category": "General",
+                "error": "Please select at least one criterion.",
             },
         )
 
-    # Compute fit scores for each activity
-    results = compute_alternative_fit_scores(decision_id, db)
+    # Delete old activities and their weights/scores
+    for activity in decision.activities:
+        db.query(ActivityWeight).filter(
+            ActivityWeight.activity_id == activity.id
+        ).delete()
+        db.query(AlternativeScore).filter(
+            AlternativeScore.activity_id == activity.id
+        ).delete()
+        db.delete(activity)
+    db.flush()
 
-    # Build chart data
-    metric_names = [m.name for m in metrics]
-    higher_is_better = {m.id: m.higher_is_better for m in metrics}
-
-    # Get scores for each activity
-    series = []
-    for act in activities:
-        scores_map = {}
-        for alt_s in (
-            db.query(AlternativeScore)
-            .filter(AlternativeScore.activity_id == act.id)
-            .all()
-        ):
-            scores_map[alt_s.metric_id] = alt_s.score
-        series.append(
-            {
-                "name": act.name,
-                "scores": [scores_map.get(m.id, 0) for m in metrics],
-            }
-        )
-
-    # Build flat rows for the detailed scores table
-    rows = []
-    for m in metrics:
-        # Get weight for this metric from any activity's ActivityWeight
-        weight = 50
-        if activities:
-            aw = (
-                db.query(ActivityWeight)
-                .filter(
-                    ActivityWeight.activity_id == activities[0].id,
-                    ActivityWeight.metric_id == m.id,
-                )
-                .first()
-            )
-            if aw:
-                weight = aw.weight
-
-        row = {
-            "metric_name": m.name,
-            "metric_desc": m.description or "",
-            "weight": weight,
-            "scores": {},
-        }
-        for act in activities:
-            for alt_s in (
-                db.query(AlternativeScore)
-                .filter(
-                    AlternativeScore.activity_id == act.id,
-                    AlternativeScore.metric_id == m.id,
-                )
-                .all()
-            ):
-                row["scores"][act.id] = alt_s.score
-        rows.append(row)
-
-    # ── Statistical significance (paired t-test of top 2 alternatives) ──
-    significance = None
-    if len(results) >= 2:
-        top_1 = results[0]["activity_name"]
-        top_2 = results[1]["activity_name"]
-        # Find per-criterion scores for both
-        scores_1 = None
-        scores_2 = None
-        for s in series:
-            if s["name"] == top_1:
-                scores_1 = s["scores"]
-            elif s["name"] == top_2:
-                scores_2 = s["scores"]
-        if scores_1 is not None and scores_2 is not None and len(scores_1) >= 2:
-            significance = paired_t_test(scores_1, scores_2)
-            if "error" in significance:
-                significance = None
-
-    return templates.TemplateResponse(
-        request,
-        "decision_result.html",
-        {
-            "request": request,
-            "decision": decision,
-            "activities": activities,
-            "metrics": metrics,
-            "metric_names": metric_names,
-            "higher_is_better": higher_is_better,
-            "series": series,
-            "rows": rows,
-            "results": results,
-            "significance": significance,
-            "active_page": "decisions",
-        },
+    # Re-create activity with updated subject name
+    activity = Activity(
+        name=subject,
+        category=decision.category or "General",
+        decision_id=decision_id,
     )
+    db.add(activity)
+    db.flush()
+
+    # Create weight rows for each selected metric
+    for mitem in metric_items:
+        aw = ActivityWeight(
+            activity_id=activity.id,
+            metric_id=mitem["metric_id"],
+            weight=mitem["default_weight"],
+        )
+        db.add(aw)
+
+    db.commit()
+
+    return RedirectResponse(url=f"/evaluate/{decision_id}/score", status_code=303)
 
 
 @router.get("/{decision_id}/score", response_class=HTMLResponse)
-async def score_page(request: Request, decision_id: int, db: Session = Depends(get_db)):
+def evaluate_score_page(
+    request: Request, decision_id: int, db: Session = Depends(get_db)
+):
+    """Score page — reuses decision_score.html with URL context variables."""
     decision = db.query(Decision).filter(Decision.id == decision_id).first()
     if not decision:
-        raise HTTPException(status_code=404, detail="Decision not found")
+        raise HTTPException(status_code=404, detail="Evaluation not found")
 
     activities = db.query(Activity).filter(Activity.decision_id == decision_id).all()
 
-    # Get metrics from ActivityWeight for this decision's activities
+    # Get metrics from ActivityWeight
     activity_ids = [a.id for a in activities]
     metric_ids = set()
     if activity_ids:
@@ -446,21 +307,202 @@ async def score_page(request: Request, decision_id: int, db: Session = Depends(g
             "criteria": criteria,
             "already_scored": already_scored,
             "active_page": "decisions",
+            "back_url": f"/evaluate/{decision_id}/review",
+            "score_url": f"/evaluate/{decision_id}/score",
+            "result_url": f"/evaluate/{decision_id}/result",
+        },
+    )
+
+
+@router.post("/{decision_id}/score", response_class=HTMLResponse)
+async def evaluate_score(
+    request: Request, decision_id: int, db: Session = Depends(get_db)
+):
+    """Submit scores and redirect to result."""
+    decision = db.query(Decision).filter(Decision.id == decision_id).first()
+    if not decision:
+        raise HTTPException(status_code=404, detail="Evaluation not found")
+
+    form = await request.form()
+
+    activities = db.query(Activity).filter(Activity.decision_id == decision_id).all()
+
+    # Get metrics from ActivityWeight
+    activity_ids = [a.id for a in activities]
+    metric_ids = set()
+    if activity_ids:
+        for aw in (
+            db.query(ActivityWeight)
+            .filter(ActivityWeight.activity_id.in_(activity_ids))
+            .all()
+        ):
+            metric_ids.add(aw.metric_id)
+    metrics = (
+        db.query(Metric).filter(Metric.id.in_(metric_ids)).all() if metric_ids else []
+    )
+
+    # Delete old alternative scores
+    for activity in activities:
+        db.query(AlternativeScore).filter(
+            AlternativeScore.activity_id == activity.id
+        ).delete()
+    db.flush()
+
+    # Parse scores from form: score_{activity_id}_{metric_id}
+    for activity in activities:
+        for metric in metrics:
+            key = f"score_{activity.id}_{metric.id}"
+            if key in form:
+                val = form.get(key)
+                if val and val.strip():
+                    score_val = float(val)
+                    alt_score = AlternativeScore(
+                        activity_id=activity.id,
+                        metric_id=metric.id,
+                        score=score_val,
+                    )
+                    db.add(alt_score)
+
+    db.commit()
+
+    return RedirectResponse(url=f"/evaluate/{decision_id}/result", status_code=303)
+
+
+@router.get("/{decision_id}/result", response_class=HTMLResponse)
+async def evaluate_result(
+    request: Request, decision_id: int, db: Session = Depends(get_db)
+):
+    """Result page — shows fit score, dimension breakdown, gap analysis, radar chart."""
+    decision = db.query(Decision).filter(Decision.id == decision_id).first()
+    if not decision:
+        raise HTTPException(status_code=404, detail="Evaluation not found")
+
+    activities = db.query(Activity).filter(Activity.decision_id == decision_id).all()
+
+    # Get metrics from ActivityWeight
+    activity_ids = [a.id for a in activities]
+    metric_ids = set()
+    if activity_ids:
+        for aw in (
+            db.query(ActivityWeight)
+            .filter(ActivityWeight.activity_id.in_(activity_ids))
+            .all()
+        ):
+            metric_ids.add(aw.metric_id)
+    metrics = (
+        db.query(Metric).filter(Metric.id.in_(metric_ids)).all() if metric_ids else []
+    )
+
+    if not activities or not metrics:
+        return templates.TemplateResponse(
+            request,
+            "evaluate_result.html",
+            {
+                "request": request,
+                "decision": decision,
+                "results": [],
+                "metric_names": [],
+                "series": [],
+                "dimension_scores": [],
+                "gap_analysis_result": None,
+                "active_page": "decisions",
+            },
+        )
+
+    # Compute fit scores
+    results = compute_alternative_fit_scores(decision_id, db)
+
+    # Compute dimension breakdown
+    dim_scores = compute_dimension_scores(decision_id, db)
+
+    # Compute gap analysis
+    gap_result = gap_analysis(dim_scores)
+
+    # Build chart data
+    metric_names = [m.name for m in metrics]
+    higher_is_better = {m.id: m.higher_is_better for m in metrics}
+
+    # Get scores for each activity
+    series = []
+    for act in activities:
+        scores_map = {}
+        for alt_s in (
+            db.query(AlternativeScore)
+            .filter(AlternativeScore.activity_id == act.id)
+            .all()
+        ):
+            scores_map[alt_s.metric_id] = alt_s.score
+        series.append(
+            {
+                "name": act.name,
+                "scores": [scores_map.get(m.id, 0) for m in metrics],
+            }
+        )
+
+    # Build flat rows for the detailed scores table
+    rows = []
+    for m in metrics:
+        weight = 50
+        if activities:
+            aw = (
+                db.query(ActivityWeight)
+                .filter(
+                    ActivityWeight.activity_id == activities[0].id,
+                    ActivityWeight.metric_id == m.id,
+                )
+                .first()
+            )
+            if aw:
+                weight = aw.weight
+
+        row = {
+            "metric_name": m.name,
+            "metric_desc": m.description or "",
+            "weight": weight,
+            "scores": {},
+        }
+        for act in activities:
+            for alt_s in (
+                db.query(AlternativeScore)
+                .filter(
+                    AlternativeScore.activity_id == act.id,
+                    AlternativeScore.metric_id == m.id,
+                )
+                .all()
+            ):
+                row["scores"][act.id] = alt_s.score
+        rows.append(row)
+
+    return templates.TemplateResponse(
+        request,
+        "evaluate_result.html",
+        {
+            "request": request,
+            "decision": decision,
+            "activities": activities,
+            "metrics": metrics,
+            "metric_names": metric_names,
+            "higher_is_better": higher_is_better,
+            "series": series,
+            "rows": rows,
+            "results": results,
+            "dimension_scores": dim_scores,
+            "gap_analysis_result": gap_result,
+            "active_page": "decisions",
         },
     )
 
 
 @router.post("/{decision_id}/delete")
-async def delete_decision(
+async def delete_evaluation(
     request: Request, decision_id: int, db: Session = Depends(get_db)
 ):
-    """Delete a decision and all associated data."""
+    """Delete an evaluation and all associated data."""
     decision = db.query(Decision).filter(Decision.id == decision_id).first()
     if not decision:
-        raise HTTPException(status_code=404, detail="Decision not found")
+        raise HTTPException(status_code=404, detail="Evaluation not found")
 
-    # AlternativeScore is not in the ORM cascade chain (no relationship from Activity),
-    # so delete it manually. The rest (Activity → ActivityWeight) cascades via ORM.
+    # Delete AlternativeScore first (not in ORM cascade)
     activity_ids = [a.id for a in decision.activities]
     if activity_ids:
         db.query(AlternativeScore).filter(

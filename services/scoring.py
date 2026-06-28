@@ -154,11 +154,7 @@ def compute_alternative_fit_scores(decision_id: int, db: Session) -> list[dict]:
     """
     from models import Activity, AlternativeScore
 
-    activities = (
-        db.query(Activity)
-        .filter(Activity.decision_id == decision_id)
-        .all()
-    )
+    activities = db.query(Activity).filter(Activity.decision_id == decision_id).all()
     if not activities:
         return []
 
@@ -193,20 +189,168 @@ def compute_alternative_fit_scores(decision_id: int, db: Session) -> list[dict]:
             score = scores.get(metric_id, 0.0)
             numerator += score * weight
             denominator += weight
-            weighted_scores.append({
-                "metric_id": metric_id,
-                "score": score,
-                "weight": weight,
-            })
+            weighted_scores.append(
+                {
+                    "metric_id": metric_id,
+                    "score": score,
+                    "weight": weight,
+                }
+            )
 
         fit = (numerator / denominator / 100.0) if denominator > 0 else 0.0
-        results.append({
-            "activity_id": activity.id,
-            "activity_name": activity.name,
-            "fit_score": round(fit, 4),
-            "fit_pct": round(fit * 100, 1),
-            "weighted_scores": weighted_scores,
-        })
+        results.append(
+            {
+                "activity_id": activity.id,
+                "activity_name": activity.name,
+                "fit_score": round(fit, 4),
+                "fit_pct": round(fit * 100, 1),
+                "weighted_scores": weighted_scores,
+            }
+        )
 
     results.sort(key=lambda x: x["fit_score"], reverse=True)
     return results
+
+
+def compute_dimension_scores(decision_id: int, db: Session) -> list[dict]:
+    """Group metric scores by dimension and compute weighted averages.
+
+    Groups metrics by their category (dimension name like 'Financial', 'Quality', etc.)
+    For each dimension, computes the weighted average of its metrics' scores.
+
+    Returns: [
+        {"dimension": "Financial", "score": 45.2, "metrics": [...], "metric_count": 2},
+        ...
+    ]
+    """
+    from models import Activity, AlternativeScore, Metric
+
+    activities = db.query(Activity).filter(Activity.decision_id == decision_id).all()
+    if not activities:
+        return []
+
+    # Get weights for the first activity (all share same weights)
+    weights: dict[int, float] = {}
+    for aw in (
+        db.query(ActivityWeight)
+        .filter(ActivityWeight.activity_id == activities[0].id)
+        .all()
+    ):
+        weights[aw.metric_id] = aw.weight
+
+    if not weights:
+        return []
+
+    # Get metric-to-dimension mapping
+    metric_ids = list(weights.keys())
+    metrics = db.query(Metric).filter(Metric.id.in_(metric_ids)).all()
+    metric_category: dict[int, str] = {m.id: m.category for m in metrics}
+
+    # Get scores for each activity (we'll average across activities for diagnose mode
+    # where there's typically just one activity)
+    activity_scores: dict[int, dict[int, float]] = {}
+    for act in activities:
+        scores: dict[int, float] = {}
+        for ascore in (
+            db.query(AlternativeScore)
+            .filter(AlternativeScore.activity_id == act.id)
+            .all()
+        ):
+            scores[ascore.metric_id] = ascore.score
+        activity_scores[act.id] = scores
+
+    # Group by dimension
+    dim_groups: dict[str, list[dict]] = {}
+    for metric_id in metric_ids:
+        cat = metric_category.get(metric_id, "General")
+        if cat not in dim_groups:
+            dim_groups[cat] = []
+        # Average score across all activities
+        scores_list = []
+        for act in activities:
+            s = activity_scores.get(act.id, {}).get(metric_id)
+            if s is not None:
+                scores_list.append(s)
+        avg_score = sum(scores_list) / len(scores_list) if scores_list else 0.0
+        dim_groups[cat].append(
+            {
+                "metric_id": metric_id,
+                "score": avg_score,
+                "weight": weights[metric_id],
+            }
+        )
+
+    # Compute weighted average per dimension
+    results = []
+    for dim_name, metric_list in dim_groups.items():
+        numerator = sum(m["score"] * m["weight"] for m in metric_list)
+        denominator = sum(m["weight"] for m in metric_list)
+        weighted_avg = (numerator / denominator) if denominator > 0 else 0.0
+        results.append(
+            {
+                "dimension": dim_name,
+                "score": round(weighted_avg, 1),
+                "metrics": metric_list,
+                "metric_count": len(metric_list),
+            }
+        )
+
+    results.sort(key=lambda x: x["score"], reverse=True)
+    return results
+
+
+def gap_analysis(dimension_scores: list[dict]) -> dict:
+    """Compare each dimension score to the overall average.
+
+    Returns: {
+        "strengths": [{"dimension": "Quality", "score": 85, "gap": 20}],
+        "weaknesses": [{"dimension": "Cost", "score": 35, "gap": -30}],
+        "overall_avg": 65.0,
+        "balanced": False  # True if all gaps < 5
+    }
+    """
+    if not dimension_scores:
+        return {
+            "strengths": [],
+            "weaknesses": [],
+            "overall_avg": 0.0,
+            "balanced": True,
+        }
+
+    overall_avg = sum(d["score"] for d in dimension_scores) / len(dimension_scores)
+
+    strengths = []
+    weaknesses = []
+    max_gap = 0.0
+
+    for d in dimension_scores:
+        gap = round(d["score"] - overall_avg, 1)
+        d["gap"] = gap
+        if abs(gap) > max_gap:
+            max_gap = abs(gap)
+        if gap > 0:
+            strengths.append(
+                {
+                    "dimension": d["dimension"],
+                    "score": d["score"],
+                    "gap": gap,
+                }
+            )
+        elif gap < 0:
+            weaknesses.append(
+                {
+                    "dimension": d["dimension"],
+                    "score": d["score"],
+                    "gap": gap,
+                }
+            )
+
+    strengths.sort(key=lambda x: x["gap"], reverse=True)
+    weaknesses.sort(key=lambda x: x["gap"])
+
+    return {
+        "strengths": strengths,
+        "weaknesses": weaknesses,
+        "overall_avg": round(overall_avg, 1),
+        "balanced": max_gap < 5.0,
+    }

@@ -1,10 +1,10 @@
 """Direct unit tests for services/ontology.py — extract_alternatives and clean logic."""
 
-import pytest
 from services.ontology import extract_alternatives
 
 
 # ── Basic "or" extraction ──
+
 
 def test_simple_or():
     """Two items separated by 'or'."""
@@ -17,10 +17,14 @@ def test_or_with_articles():
 
 
 def test_or_with_the():
-    assert extract_alternatives("the macbook or the thinkpad") == ["Macbook", "Thinkpad"]
+    assert extract_alternatives("the macbook or the thinkpad") == [
+        "Macbook",
+        "Thinkpad",
+    ]
 
 
 # ── "vs" variants ──
+
 
 def test_vs():
     assert extract_alternatives("Python vs JavaScript") == ["Python", "JavaScript"]
@@ -36,9 +40,13 @@ def test_versus():
 
 # ── Verb stripping (the "do" / "play" / "should I" bugs) ──
 
+
 def test_do_verb():
     """'should I do X or Y' → ['X', 'Y']."""
-    assert extract_alternatives("should I do aikido or football") == ["Aikido", "Football"]
+    assert extract_alternatives("should I do aikido or football") == [
+        "Aikido",
+        "Football",
+    ]
 
 
 def test_play_verb():
@@ -51,7 +59,10 @@ def test_buy_verb():
 
 
 def test_choose_verb():
-    assert extract_alternatives("choose Python or JavaScript") == ["Python", "JavaScript"]
+    assert extract_alternatives("choose Python or JavaScript") == [
+        "Python",
+        "JavaScript",
+    ]
 
 
 def test_pick_verb():
@@ -76,19 +87,27 @@ def test_have_verb():
 
 # ── Prefix stripping ──
 
+
 def test_should_i_prefix():
     assert extract_alternatives("should I buy a car or a bike") == ["Car", "Bike"]
 
 
 def test_i_want_to_prefix():
-    assert extract_alternatives("I want to learn guitar or piano") == ["Guitar", "Piano"]
+    assert extract_alternatives("I want to learn guitar or piano") == [
+        "Guitar",
+        "Piano",
+    ]
 
 
 def test_am_i_prefix():
-    assert extract_alternatives("am I ready for a dog or a cat") == ["Ready for a dog", "Cat"]
+    assert extract_alternatives("am I ready for a dog or a cat") == [
+        "Ready for a dog",
+        "Cat",
+    ]
 
 
 # ── No-match cases ──
+
 
 def test_no_match_single_item():
     assert extract_alternatives("What should I do today?") == []
@@ -108,6 +127,7 @@ def test_no_match_numbers():
 
 # ── Edge cases ──
 
+
 def test_trailing_punctuation():
     """Trailing ? and . are stripped."""
     result = extract_alternatives("Should I buy a car or a bike?")
@@ -122,7 +142,9 @@ def test_mixed_case():
 
 def test_multiple_words_in_alternative():
     """Only first letter is capitalized; remaining words preserve case."""
-    result = extract_alternatives("should I buy a three-bedroom house or a studio apartment")
+    result = extract_alternatives(
+        "should I buy a three-bedroom house or a studio apartment"
+    )
     assert result == ["Three-bedroom house", "Studio apartment"]
 
 

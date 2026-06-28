@@ -21,9 +21,12 @@ class Decision(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     query = Column(String(500), nullable=False)
     category = Column(String, nullable=True)
+    mode = Column(String, default="choose", nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
-    activities = relationship("Activity", back_populates="decision", cascade="all, delete-orphan")
+    activities = relationship(
+        "Activity", back_populates="decision", cascade="all, delete-orphan"
+    )
 
     def __repr__(self):
         return f"<Decision(id={self.id}, query={self.query!r})>"
@@ -42,9 +45,7 @@ class Metric(Base):
 
     parent = relationship("Metric", remote_side="Metric.id", backref="children")
 
-    __table_args__ = (
-        UniqueConstraint("name", name="uq_metric_name"),
-    )
+    __table_args__ = (UniqueConstraint("name", name="uq_metric_name"),)
 
     def __repr__(self):
         return f"<Metric(id={self.id}, name={self.name!r}, category={self.category!r})>"
@@ -59,7 +60,9 @@ class Activity(Base):
     description = Column(String, nullable=True)
     decision_id = Column(Integer, ForeignKey("decisions.id"), nullable=True, index=True)
 
-    weights = relationship("ActivityWeight", back_populates="activity", cascade="all, delete-orphan")
+    weights = relationship(
+        "ActivityWeight", back_populates="activity", cascade="all, delete-orphan"
+    )
     decision = relationship("Decision", back_populates="activities")
 
     __table_args__ = (
@@ -93,8 +96,12 @@ class AlternativeScore(Base):
     __tablename__ = "alternative_scores"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    activity_id = Column(Integer, ForeignKey("activities.id", ondelete="CASCADE"), nullable=False)
-    metric_id = Column(Integer, ForeignKey("metrics.id", ondelete="CASCADE"), nullable=False)
+    activity_id = Column(
+        Integer, ForeignKey("activities.id", ondelete="CASCADE"), nullable=False
+    )
+    metric_id = Column(
+        Integer, ForeignKey("metrics.id", ondelete="CASCADE"), nullable=False
+    )
     score = Column(Float, nullable=False)  # 0.0–100.0
 
     __table_args__ = (

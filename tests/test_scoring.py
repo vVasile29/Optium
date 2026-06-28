@@ -11,7 +11,9 @@ from services.scoring import compute_alternative_fit_scores
 
 @pytest.fixture(scope="function")
 def db():
-    engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+    engine = create_engine(
+        "sqlite:///:memory:", connect_args={"check_same_thread": False}
+    )
     Base.metadata.create_all(bind=engine)
     TestSession = sessionmaker(autocommit=False, autoflush=False, bind=engine)
     session = TestSession()
@@ -48,21 +50,25 @@ def test_basic_scoring(db):
     alt2 = make_activity(db, "Option B", decision.id)
 
     # Weights: Cost=80, Quality=60
-    db.add_all([
-        ActivityWeight(activity_id=alt1.id, metric_id=m1.id, weight=80),
-        ActivityWeight(activity_id=alt1.id, metric_id=m2.id, weight=60),
-        ActivityWeight(activity_id=alt2.id, metric_id=m1.id, weight=80),
-        ActivityWeight(activity_id=alt2.id, metric_id=m2.id, weight=60),
-    ])
+    db.add_all(
+        [
+            ActivityWeight(activity_id=alt1.id, metric_id=m1.id, weight=80),
+            ActivityWeight(activity_id=alt1.id, metric_id=m2.id, weight=60),
+            ActivityWeight(activity_id=alt2.id, metric_id=m1.id, weight=80),
+            ActivityWeight(activity_id=alt2.id, metric_id=m2.id, weight=60),
+        ]
+    )
     db.flush()
 
     # Scores: Option A -> Cost=30, Quality=80; Option B -> Cost=70, Quality=40
-    db.add_all([
-        AlternativeScore(activity_id=alt1.id, metric_id=m1.id, score=30),
-        AlternativeScore(activity_id=alt1.id, metric_id=m2.id, score=80),
-        AlternativeScore(activity_id=alt2.id, metric_id=m1.id, score=70),
-        AlternativeScore(activity_id=alt2.id, metric_id=m2.id, score=40),
-    ])
+    db.add_all(
+        [
+            AlternativeScore(activity_id=alt1.id, metric_id=m1.id, score=30),
+            AlternativeScore(activity_id=alt1.id, metric_id=m2.id, score=80),
+            AlternativeScore(activity_id=alt2.id, metric_id=m1.id, score=70),
+            AlternativeScore(activity_id=alt2.id, metric_id=m2.id, score=40),
+        ]
+    )
     db.commit()
 
     results = compute_alternative_fit_scores(decision.id, db)
@@ -122,6 +128,7 @@ def test_no_weights_skipped(db):
 def test_paired_t_test_identical():
     """Identical scores → t=0, p=1, not significant."""
     from services.scoring import paired_t_test
+
     result = paired_t_test([50, 60, 70, 80], [50, 60, 70, 80])
     assert result["t_statistic"] == 0.0
     assert result["p_value"] == 1.0
@@ -131,6 +138,7 @@ def test_paired_t_test_identical():
 def test_paired_t_test_significant():
     """Large consistent differences → significant."""
     from services.scoring import paired_t_test
+
     result = paired_t_test([90, 85, 88, 92], [50, 55, 60, 45])
     assert result["significant"] is True
     assert result["p_value"] < 0.05
@@ -139,6 +147,7 @@ def test_paired_t_test_significant():
 def test_paired_t_test_insufficient():
     """Single criterion → error."""
     from services.scoring import paired_t_test
+
     result = paired_t_test([50], [60])
     assert "error" in result
 
@@ -146,6 +155,7 @@ def test_paired_t_test_insufficient():
 def test_paired_t_test_mismatched_lengths():
     """Mismatched lengths → error."""
     from services.scoring import paired_t_test
+
     result = paired_t_test([50, 60], [50])
     assert "error" in result
 
@@ -153,6 +163,7 @@ def test_paired_t_test_mismatched_lengths():
 def test_paired_t_test_no_difference():
     """Scores that average to same → not significant."""
     from services.scoring import paired_t_test
+
     result = paired_t_test([51, 49], [50, 50])
     assert result["significant"] is False
     assert result["mean_difference"] == 0.0
@@ -163,12 +174,14 @@ def test_sorting_order(db):
     m = make_metric(db, "Score")
     alt1 = make_activity(db, "Low", decision.id)
     alt2 = make_activity(db, "High", decision.id)
-    db.add_all([
-        ActivityWeight(activity_id=alt1.id, metric_id=m.id, weight=100),
-        ActivityWeight(activity_id=alt2.id, metric_id=m.id, weight=100),
-        AlternativeScore(activity_id=alt1.id, metric_id=m.id, score=30),
-        AlternativeScore(activity_id=alt2.id, metric_id=m.id, score=90),
-    ])
+    db.add_all(
+        [
+            ActivityWeight(activity_id=alt1.id, metric_id=m.id, weight=100),
+            ActivityWeight(activity_id=alt2.id, metric_id=m.id, weight=100),
+            AlternativeScore(activity_id=alt1.id, metric_id=m.id, score=30),
+            AlternativeScore(activity_id=alt2.id, metric_id=m.id, score=90),
+        ]
+    )
     db.commit()
     results = compute_alternative_fit_scores(decision.id, db)
     assert len(results) == 2

@@ -16,7 +16,7 @@
             type="text"
             name="q"
             class="hero-input"
-            placeholder='e.g. "Should I buy a house or an apartment?", "Which job offer should I take?", "Am I better off as a bodybuilder or a runner?"'
+            placeholder='e.g. "Should I buy a house or an apartment?", "How good is a Tesla for commuting?"'
             value="{{ query or '' }}"
         >
         <button type="submit" class="btn btn-primary hero-btn">Decide</button>
@@ -32,12 +32,13 @@
     <div class="card-grid">
         {% for decision in decisions %}
         <div class="card" style="position: relative;">
-            <a href="/decisions/{{ decision.id }}/result" class="card-body" style="display: block; text-decoration: none; color: inherit;">
+            <a href="{{ decision.result_url }}" class="card-body" style="display: block; text-decoration: none; color: inherit;">
                 <h3 class="card-title">{{ decision.query }}</h3>
                 <p class="card-text">{{ decision.created_at.strftime('%Y-%m-%d %H:%M') }}</p>
                 {% if decision.category %}
                 <span class="badge badge-{{ decision.category.lower() }}">{{ decision.category }}</span>
                 {% endif %}
+                <span class="badge" style="background: {% if decision.mode == 'diagnose' %}#dbeafe; color: #1d4ed8{% else %}#dcfce7; color: #15803d{% endif %};">{{ "Diagnosis" if decision.mode == 'diagnose' else "Compare" }}</span>
                 <span class="card-link">View results →</span>
             </a>
             <form action="/decisions/{{ decision.id }}/delete" method="POST" style="position: absolute; top: 0.5rem; right: 0.5rem;">
