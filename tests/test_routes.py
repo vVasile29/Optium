@@ -92,9 +92,17 @@ def test_index_page(client, db):
     assert "What's your decision today?" in response.text
     assert "House vs Apartment" in response.text
     assert "Tesla for commuting" in response.text
-    
     assert "Python, Java, Go" in response.text
+    assert "Cost" in response.text
+    assert "Quality" in response.text
+    assert "Convenience" in response.text
+    assert "Apartment · 82%" in response.text
     assert "Multi-Criteria Decision Analysis" in response.text
+    assert "mode-picker" not in response.text
+    assert "mode-pill" not in response.text
+    assert 'name="mode"' not in response.text
+    assert "decision workflows" not in response.text
+    assert "categoryPicker" not in response.text
 
 
 def test_create_metric(client, db):
@@ -237,6 +245,10 @@ def test_decision_list_page(client, db):
     assert response.status_code == 200
     assert "Saved Decisions" in response.text
     assert "What's your decision today?" not in response.text
+    assert "badge-diagnose" not in response.text
+    assert "badge-screen" not in response.text
+    assert "badge-rank" not in response.text
+    assert "badge-choose" not in response.text
 
 
 def test_decision_list_mode_aware_result_links(client, db):
@@ -258,6 +270,10 @@ def test_decision_list_mode_aware_result_links(client, db):
     assert f'/evaluate/{decisions[1].id}/result' in response.text
     assert f'/screen/{decisions[2].id}/result' in response.text
     assert f'/rank/{decisions[3].id}/result' in response.text
+    assert "badge-diagnose" not in response.text
+    assert "badge-screen" not in response.text
+    assert "badge-rank" not in response.text
+    assert "badge-choose" not in response.text
 
 
 def test_delete_decision_redirect_param(client, db):
@@ -912,67 +928,8 @@ def test_rank_result_reuses_decision_result(client, db):
     assert "Ranking" in result.text
     assert "%" in result.text
 
-
-# ── Explicit mode routing tests ──
-
-
-def test_explicit_mode_rank_routes_to_rank(client, db):
-    """mode=rank with list query → 303 to /rank/{id}/review"""
-    resp = client.post(
-        "/decide",
-        data={"mode": "rank", "q": "python, java, go"},
-        follow_redirects=False,
-    )
-    assert resp.status_code == 303
-    assert resp.headers["location"].startswith("/rank/")
-    assert "/review" in resp.headers["location"]
-
-
-def test_explicit_mode_rank_fewer_than_three(client, db):
-    """mode=rank with only 2 alternatives → stays in RANK, shows validation/help"""
-    resp = client.post(
-        "/decide",
-        data={"mode": "rank", "q": "python, java"},
-        follow_redirects=False,
-    )
-    # Should NOT redirect to rank review (no 303) - renders directly with help
-    # Actually, with mode=rank, fewer than 3 alternatives renders rank_review.html directly (200)
-    assert resp.status_code == 200
-    assert "Ranking Review" in resp.text or "ranking" in resp.text.lower()
-    # Should show validation message about needing 3 alternatives
-    assert "at least 3" in resp.text.lower()
-
-
-def test_explicit_mode_choose_still_works(client, db):
-    """mode=choose parses as CHOOSE and renders review page"""
-    resp = client.post(
-        "/decide",
-        data={"mode": "choose", "q": "House or Apartment?"},
-        follow_redirects=False,
-    )
-    assert resp.status_code == 200
-    assert "Decision Review" in resp.text
-    assert "House" in resp.text or "house" in resp.text.lower()
-    assert "Apartment" in resp.text or "apartment" in resp.text.lower()
-
-
-def test_explicit_mode_diagnose_still_works(client, db):
-    """mode=diagnose routes to DIAGNOSE review"""
-    resp = client.post(
-        "/decide",
-        data={"mode": "diagnose", "q": "How good is a Tesla?"},
-        follow_redirects=False,
-    )
-    assert resp.status_code == 303
-    assert resp.headers["location"].startswith("/evaluate/")
-
-    review_resp = client.get(resp.headers["location"])
-    assert review_resp.status_code == 200
-    assert "Tesla" in review_resp.text
-
-
-def test_no_mode_still_uses_heuristic(client, db):
-    """No mode param → heuristic fallback works as before"""
+def test_decide_heuristic_routing(client, db):
+    """/decide auto-detects workflow from query text."""
     resp = client.post(
         "/decide",
         data={"q": "Should I buy a house or an apartment?"},

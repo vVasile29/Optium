@@ -19,7 +19,6 @@
                     {% if decision.category %}
                     <span class="badge badge-{{ decision.category.lower() }}">{{ decision.category }}</span>
                     {% endif %}
-                    <span class="badge badge-{{ 'diagnose' if decision.mode == 'diagnose' else 'screen' if decision.mode == 'screen' else 'rank' if decision.mode == 'rank' else 'choose' }}">{{ "Diagnosis" if decision.mode == 'diagnose' else "Screen" if decision.mode == 'screen' else "Rank" if decision.mode == 'rank' else "Compare" }}</span>
                 </div>
                 <span class="card-link">View results →</span>
             </a>

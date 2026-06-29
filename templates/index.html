@@ -1,17 +1,12 @@
 {% extends "base.html" %}
 {% block content %}
 
-<section class="landing-hero" x-data="categoryPicker()">
+<section class="landing-hero">
     <div class="hero-shell">
         <div class="hero-copy">
             <span class="eyebrow">MCDA decision support</span>
             <h1 class="hero-title">What's your decision today?</h1>
             <p class="hero-subtitle">Turn a messy question into a weighted scoring matrix with universal criteria, clear tradeoffs, and a defensible winner.</p>
-
-            <div class="mode-picker" role="group" aria-label="Decision mode">
-                <button type="button" class="mode-pill" :class="{ active: mode === '' }" :aria-pressed="(mode === '').toString()" @click="setMode('')">Compare / Rank</button>
-                <button type="button" class="mode-pill" :class="{ active: mode === 'diagnose' }" :aria-pressed="(mode === 'diagnose').toString()" @click="setMode('diagnose')">Diagnose</button>
-            </div>
 
             {% if error %}
             <div class="alert alert-danger landing-alert">
@@ -20,14 +15,12 @@
             {% endif %}
 
             <form action="/decide" method="POST" class="hero-form landing-form">
-                <input type="hidden" name="mode" x-bind:value="mode">
                 <input
                     type="text"
                     name="q"
                     class="hero-input"
                     aria-label="Decision question"
-                    x-bind:placeholder="placeholder"
-                    placeholder='e.g. "Should I buy a house or an apartment?"'
+                    placeholder='e.g. "Should I buy a house or an apartment?" or "Rank Python, Java, Go" or "How good is a Tesla for commuting?"'
                     value="{{ query or '' }}"
                 >
                 <button type="submit" class="btn btn-primary hero-btn">Start analysis</button>
@@ -38,28 +31,31 @@
         <div class="hero-preview" aria-label="Decision matrix preview">
             <div class="preview-card">
                 <div class="preview-header">
-                    <span class="badge" :class="example.badgeClass" x-text="example.label"></span>
-                    <span class="text-muted" x-text="example.summary"></span>
+                    <span class="badge badge-choose">Compare / Rank</span>
+                    <span class="text-muted">Weighted comparison or ranking</span>
                 </div>
-                <h2 x-text="example.title"></h2>
-                <div class="preview-alternatives" :style="`grid-template-columns: 1fr repeat(${example.alternatives.length}, minmax(64px, auto))`">
+                <h2>House vs Apartment</h2>
+                <div class="preview-alternatives" style="grid-template-columns: 1fr repeat(2, minmax(64px, auto))">
                     <span>Criterion</span>
-                    <template x-for="alternative in example.alternatives" :key="alternative">
-                        <strong x-text="alternative"></strong>
-                    </template>
+                    <strong>House</strong>
+                    <strong>Apartment</strong>
                 </div>
-                <template x-for="row in example.rows" :key="row.name">
-                    <div class="preview-matrix-row" :style="`grid-template-columns: 1fr repeat(${example.alternatives.length}, minmax(64px, auto))`">
-                        <span x-text="row.name"></span>
-                        <template x-for="(score, index) in row.scores" :key="`${row.name}-${index}`">
-                            <div>
-                                <strong x-text="score"></strong>
-                                <div class="mini-bar"><span :style="`width: ${score}%`"></span></div>
-                            </div>
-                        </template>
-                    </div>
-                </template>
-                <div class="preview-winner"><span x-text="example.calloutLabel"></span><strong x-text="example.callout"></strong></div>
+                <div class="preview-matrix-row" style="grid-template-columns: 1fr repeat(2, minmax(64px, auto))">
+                    <span>Cost</span>
+                    <div><strong>62</strong><div class="mini-bar"><span style="width: 62%"></span></div></div>
+                    <div><strong>84</strong><div class="mini-bar"><span style="width: 84%"></span></div></div>
+                </div>
+                <div class="preview-matrix-row" style="grid-template-columns: 1fr repeat(2, minmax(64px, auto))">
+                    <span>Quality</span>
+                    <div><strong>88</strong><div class="mini-bar"><span style="width: 88%"></span></div></div>
+                    <div><strong>76</strong><div class="mini-bar"><span style="width: 76%"></span></div></div>
+                </div>
+                <div class="preview-matrix-row" style="grid-template-columns: 1fr repeat(2, minmax(64px, auto))">
+                    <span>Convenience</span>
+                    <div><strong>68</strong><div class="mini-bar"><span style="width: 68%"></span></div></div>
+                    <div><strong>86</strong><div class="mini-bar"><span style="width: 86%"></span></div></div>
+                </div>
+                <div class="preview-winner"><span>Recommended</span><strong>Apartment · 82%</strong></div>
             </div>
         </div>
     </div>
@@ -68,7 +64,6 @@
 <section class="credibility-band" aria-label="Methodology highlights">
     <div><strong>12</strong><span>universal metrics</span></div>
     <div><strong>6</strong><span>value dimensions</span></div>
-    <div><strong>2</strong><span>decision workflows</span></div>
     <div><strong>0–100</strong><span>weighted scoring</span></div>
 </section>
 
@@ -103,12 +98,8 @@
 <section class="landing-section">
     <div class="landing-section-header">
         <span class="eyebrow">Use cases</span>
-        <h2>One engine, multiple decision modes</h2>
-    </div>
-    <div class="use-case-grid">
-        <div class="use-case-card"><span class="badge badge-choose">Compare / Rank</span><p>“Should I buy a house or an apartment?” or “Rank Python, Java, Go”</p></div>
-        <div class="use-case-card"><span class="badge badge-diagnose">Diagnose</span><p>“How good is a Tesla for commuting?”</p></div>
-        
+        <h2>One unified decision flow</h2>
+        <p>Describe your decision naturally. Pondera automatically detects comparisons, rankings, or single-option evaluations from your prompt — no mode selection needed.</p>
     </div>
 </section>
 
@@ -127,7 +118,6 @@
                 {% if decision.category %}
                 <span class="badge badge-{{ decision.category.lower() }}">{{ decision.category }}</span>
                 {% endif %}
-                <span class="badge badge-{{ 'diagnose' if decision.mode == 'diagnose' else 'screen' if decision.mode == 'screen' else 'rank' if decision.mode == 'rank' else 'choose' }}">{{ "Diagnosis" if decision.mode == 'diagnose' else "Screen" if decision.mode == 'screen' else "Rank" if decision.mode == 'rank' else "Compare" }}</span>
                 <span class="card-link">View results →</span>
             </a>
             <form action="/decisions/{{ decision.id }}/delete" method="POST" class="decision-card-delete">
@@ -151,56 +141,5 @@
     <h2>Make the next decision auditable.</h2>
     <a href="#" class="btn btn-primary btn-lg" onclick="window.scrollTo({ top: 0, behavior: 'smooth' }); return false;">Start with a question</a>
 </section>
-
-<script>
-function categoryPicker() {
-    const placeholders = {
-        '': 'e.g. "Should I buy a house or an apartment?" or "Rank Python, Java, Go"',
-        diagnose: 'e.g. "How good is a Tesla for commuting?"',
-    };
-    const examples = {
-        '': {
-            label: 'Compare / Rank',
-            badgeClass: 'badge-choose',
-            summary: 'Weighted comparison or ranking',
-            title: 'House vs Apartment',
-            alternatives: ['House', 'Apartment'],
-            rows: [
-                { name: 'Cost', scores: [62, 84] },
-                { name: 'Quality', scores: [88, 76] },
-                { name: 'Convenience', scores: [68, 86] }
-            ],
-            calloutLabel: 'Recommended',
-            callout: 'Apartment · 82%'
-        },
-        diagnose: {
-            label: 'Diagnose',
-            badgeClass: 'badge-diagnose',
-            summary: 'Single-option fit',
-            title: 'Tesla for commuting',
-            alternatives: ['Tesla'],
-            rows: [
-                { name: 'Performance', scores: [90] },
-                { name: 'Cost', scores: [58] },
-                { name: 'Convenience', scores: [82] }
-            ],
-            calloutLabel: 'Gap analysis',
-            callout: 'Strong performance; review cost'
-        },
-    };
-    return {
-        mode: '',
-        placeholder: placeholders[''],
-        examples,
-        get example() {
-            return this.examples[this.mode] || this.examples[''];
-        },
-        setMode(nextMode) {
-            this.mode = nextMode;
-            this.placeholder = placeholders[nextMode] || placeholders[''];
-        }
-    };
-}
-</script>
 
 {% endblock %}

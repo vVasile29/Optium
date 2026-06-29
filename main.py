@@ -89,7 +89,6 @@ async def decide(request: Request, db: Session = Depends(get_db)):
 
     form = await request.form()
     query = form.get("q", "").strip()
-    mode = form.get("mode", "").strip().lower()
 
     # ── Helper: seed default weights for one activity ──
     def _seed_default_weights(activity_id: int) -> None:
@@ -127,137 +126,7 @@ async def decide(request: Request, db: Session = Depends(get_db)):
             },
         )
 
-    # ── Explicit mode routing (before heuristic) ──
-    if mode == "choose":
-        parsed = parse_question(query)
-        alternatives = parsed["alternatives"]
-        is_parsed = parsed["parsed"]
-        category = parsed["category"]
-        criteria_list = parsed["criteria"]
-
-        decision = Decision(query=query, category=category)
-        db.add(decision)
-        db.flush()
-
-        for alt_name in alternatives:
-            activity = Activity(
-                name=alt_name, category=category, decision_id=decision.id
-            )
-            db.add(activity)
-            db.flush()
-            _seed_default_weights(activity.id)
-
-        db.commit()
-
-        all_metrics = db.query(Metric).all()
-        metric_map = {m.name: m for m in all_metrics}
-        criteria_with_ids = []
-        for c in criteria_list:
-            metric = metric_map.get(c["name"])
-            criteria_with_ids.append(
-                {**c, "id": metric.id if metric else None}
-            )
-
-        return templates.TemplateResponse(
-            request,
-            "decision_review.html",
-            {
-                "request": request,
-                "decision": decision,
-                "alternatives": alternatives,
-                "criteria": criteria_with_ids,
-                "category": category,
-                "parsed": is_parsed,
-                "active_page": "decisions",
-            },
-        )
-
-    if mode == "diagnose":
-        from services.parser import extract_subject
-
-        diag = extract_subject(query)
-        subject = diag.get("subject", "This option")
-
-        decision = Decision(query=query, category="General", mode="diagnose")
-        db.add(decision)
-        db.flush()
-
-        activity = Activity(
-            name=subject, category="General", decision_id=decision.id
-        )
-        db.add(activity)
-        db.flush()
-        _seed_default_weights(activity.id)
-        db.commit()
-
-        return RedirectResponse(
-            url=f"/evaluate/{decision.id}/review", status_code=303
-        )
-
-    if mode == "rank":
-        from services.parser import extract_list
-
-        list_parsed = extract_list(query)
-        alternatives = list_parsed.get("alternatives", [])
-
-        decision = Decision(query=query, category="General", mode="rank")
-        db.add(decision)
-        db.flush()
-
-        alt_names = (
-            alternatives
-            if alternatives
-            else ["Option A", "Option B", "Option C"]
-        )
-        for name in alt_names:
-            activity = Activity(
-                name=name, category="General", decision_id=decision.id
-            )
-            db.add(activity)
-            db.flush()
-            _seed_default_weights(activity.id)
-
-        db.commit()
-
-        if len(alternatives) >= 3:
-            return RedirectResponse(
-                url=f"/rank/{decision.id}/review", status_code=303
-            )
-        else:
-            # Render rank review with validation/help
-            all_metrics = (
-                db.query(Metric)
-                .order_by(Metric.category, Metric.name)
-                .all()
-            )
-            metric_map = {m.name: m for m in all_metrics}
-            criteria = []
-            for m in UNIVERSAL_METRICS:
-                metric = metric_map.get(m["name"])
-                criteria.append(
-                    {
-                        **m,
-                        "id": metric.id if metric else None,
-                    }
-                )
-            validation = {
-                "error": f"Ranking requires at least 3 alternatives. You provided {len(alternatives)}."
-            }
-            return templates.TemplateResponse(
-                request,
-                "rank_review.html",
-                {
-                    "request": request,
-                    "decision": decision,
-                    "alternatives": alt_names,
-                    "criteria": criteria,
-                    "parsed": False,
-                    "validation": validation,
-                    "active_page": "decisions",
-                },
-            )
-
-    # ── Heuristic fallback (no explicit mode) ──
+    # ── Heuristic routing (auto-detect mode from query) ──
     parsed = parse_question(query)
     alternatives = parsed["alternatives"]
     criteria_list = parsed["criteria"]
