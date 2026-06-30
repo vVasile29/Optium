@@ -1270,3 +1270,36 @@ def test_slider_fill_markup_and_sensitivity_classes(client, db):
     # Result should contain results and series
     assert "results" in result_data
     assert "series" in result_data
+
+
+def test_api_decision_rows_expose_sensitivity_scoring_fields(client, db):
+    """Decision detail rows include metric direction and per-activity weights."""
+    from models import Activity, ActivityWeight, AlternativeScore, Decision, Metric
+
+    metric = db.query(Metric).filter(Metric.higher_is_better.is_(False)).first()
+    assert metric is not None
+
+    decision = Decision(query="Sensitivity parity", category="General", mode="choose")
+    db.add(decision)
+    db.flush()
+    first = Activity(name="First", category="General", decision_id=decision.id)
+    second = Activity(name="Second", category="General", decision_id=decision.id)
+    db.add_all([first, second])
+    db.flush()
+
+    db.add(ActivityWeight(activity_id=first.id, metric_id=metric.id, weight=80))
+    db.add(ActivityWeight(activity_id=second.id, metric_id=metric.id, weight=20))
+    db.add(AlternativeScore(activity_id=first.id, metric_id=metric.id, score=10))
+    db.add(AlternativeScore(activity_id=second.id, metric_id=metric.id, score=30))
+    db.commit()
+
+    response = client.get(f"/api/decisions/{decision.id}")
+    assert response.status_code == 200
+    data = response.json()
+    row = data["rows"][0]
+
+    assert row["metric_id"] == metric.id
+    assert row["higher_is_better"] is False
+    assert row["weights"][str(first.id)] == 80
+    assert row["weights"][str(second.id)] == 20
+    assert data["results"][0]["fit_score"] == 0.9

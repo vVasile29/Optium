@@ -173,6 +173,7 @@ def _build_decision_detail(
     rows = []
     for m in metrics:
         weight = 50
+        weights = {}
         if activities:
             aw = (
                 db.query(ActivityWeight)
@@ -186,12 +187,25 @@ def _build_decision_detail(
                 weight = aw.weight
 
         row = {
+            "metric_id": m.id,
             "metric_name": m.name,
             "metric_desc": m.description or "",
+            "higher_is_better": m.higher_is_better,
             "weight": weight,
+            "weights": weights,
             "scores": {},
         }
         for act in activities:
+            aw = (
+                db.query(ActivityWeight)
+                .filter(
+                    ActivityWeight.activity_id == act.id,
+                    ActivityWeight.metric_id == m.id,
+                )
+                .first()
+            )
+            if aw:
+                row["weights"][act.id] = aw.weight
             for alt_s in (
                 db.query(AlternativeScore)
                 .filter(

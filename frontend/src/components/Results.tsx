@@ -18,7 +18,7 @@ import SignificanceBadge from "@/components/SignificanceBadge";
 import ThresholdPanel from "@/components/ThresholdPanel";
 import ExportButton from "@/components/ExportButton";
 import type { FitResult } from "@/types";
-import { recomputeFitScores } from "@/lib/scoring";
+import { filterResultsToSurvivors, recomputeFitScores } from "@/lib/scoring";
 
 const RANK_META = [
   {
@@ -92,6 +92,12 @@ export default function Results() {
     );
   }, [data, metricWeights]);
 
+  const rankingResults = useMemo<FitResult[]>(() => {
+    return filterResultsToSurvivors(displayResults, data?.filter_result);
+  }, [data, displayResults]);
+
+  const hasFilterResult = data?.filter_result !== null && data?.filter_result !== undefined;
+
   // Whether actual scores have been submitted (rows contain non-zero scores)
   const hasScores = useMemo(() => {
     if (!data?.rows) return false;
@@ -99,9 +105,9 @@ export default function Results() {
   }, [data]);
 
   const maxFitPct = useMemo(() => {
-    if (displayResults.length === 0) return 100;
-    return Math.max(...displayResults.map((r) => r.fit_pct), 1);
-  }, [displayResults]);
+    if (rankingResults.length === 0) return 100;
+    return Math.max(...rankingResults.map((r) => r.fit_pct), 1);
+  }, [rankingResults]);
 
   // ── Loading state ──
   if (loading) {
@@ -175,11 +181,23 @@ export default function Results() {
       {/* ── Ranking Cards ── */}
       <section className="space-y-3">
         <h2 className="text-xl font-semibold">
-          {data.filter_result?.survivor_results
-            ? "Survivor Ranking (filtered)"
+          {hasFilterResult
+            ? "Sensitivity-adjusted ranking of current survivors"
             : "Ranking"}
         </h2>
-        {displayResults.map((r, idx) => {
+        {hasFilterResult && (
+          <p className="text-sm text-muted-foreground">
+            Pass/fail membership is based on saved threshold results.
+          </p>
+        )}
+        {hasFilterResult && rankingResults.length === 0 && (
+          <Card>
+            <CardContent className="py-8 text-center text-muted-foreground">
+              No alternatives currently pass the saved thresholds.
+            </CardContent>
+          </Card>
+        )}
+        {rankingResults.map((r, idx) => {
           const meta = rankMeta(idx);
           const barWidth = maxFitPct > 0 ? (r.fit_pct / maxFitPct) * 100 : 0;
           return (

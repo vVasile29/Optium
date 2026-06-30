@@ -61,9 +61,12 @@ export interface SeriesData {
 }
 
 export interface ScoreRow {
+  metric_id?: number;
   metric_name: string;
   metric_desc: string;
+  higher_is_better?: boolean;
   weight: number;
+  weights?: Record<number, number>;
   scores: Record<number, number>;
 }
 

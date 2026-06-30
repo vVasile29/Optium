@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "allowImportingTsExtensions": false,
+    "declaration": false,
+    "module": "ESNext",
+    "noEmit": false,
+    "outDir": "/tmp/opencode/optium-frontend-test-dist",
+    "rootDir": "."
+  },
+  "include": ["src/lib/scoring.ts", "src/types/index.ts", "tests/**/*.ts"]
+}

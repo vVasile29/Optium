@@ -119,6 +119,12 @@ export default function ScreenResult() {
   const passed = filterResult?.passed ?? [];
   const failed = filterResult?.failed ?? [];
 
+  const survivorRankingResults = useMemo<FitResult[]>(() => {
+    if (survivors.length === 0) return [];
+    const survivorIds = new Set(survivors.map((r) => r.activity_id));
+    return displayResults.filter((r) => survivorIds.has(r.activity_id));
+  }, [displayResults, survivors]);
+
   const handleSensitivityChange = useCallback(
     (metricName: string, value: number[]) => {
       setMetricWeights((prev) => ({ ...prev, [metricName]: value[0] }));
@@ -127,9 +133,9 @@ export default function ScreenResult() {
   );
 
   const maxFitPct = useMemo(() => {
-    if (displayResults.length === 0) return 100;
-    return Math.max(...displayResults.map((r) => r.fit_pct), 1);
-  }, [displayResults]);
+    if (survivorRankingResults.length === 0) return 100;
+    return Math.max(...survivorRankingResults.map((r) => r.fit_pct), 1);
+  }, [survivorRankingResults]);
 
   // ── Loading state ──
   if (loading) {
@@ -297,10 +303,15 @@ export default function ScreenResult() {
       )}
 
       {/* ── Survivor Ranking ── */}
-      {survivors.length > 0 && (
+      {survivorRankingResults.length > 0 && (
         <section className="space-y-3">
-          <h2 className="text-xl font-semibold">Survivor Ranking</h2>
-          {survivors.map((r, idx) => {
+          <h2 className="text-xl font-semibold">
+            Sensitivity-adjusted ranking of current survivors
+          </h2>
+          <p className="text-sm text-muted-foreground">
+            Pass/fail membership is based on saved threshold results.
+          </p>
+          {survivorRankingResults.map((r, idx) => {
             const meta = rankMeta(idx);
             const barWidth = maxFitPct > 0 ? (r.fit_pct / maxFitPct) * 100 : 0;
             return (
