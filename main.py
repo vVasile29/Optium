@@ -14,6 +14,7 @@ from routers.evaluate import router as evaluate_router
 from routers.screen import router as screen_router
 from routers.rank import router as rank_router
 from services.parser import parse_question
+from services.decision_limits import enforce_decision_size
 
 
 @asynccontextmanager
@@ -170,6 +171,7 @@ async def decide(request: Request, db: Session = Depends(get_db)):
 
         list_parsed = extract_list(query)
         if list_parsed["parsed"]:
+            enforce_decision_size(len(list_parsed["alternatives"]), len(UNIVERSAL_METRICS))
             # Route as RANK
             decision = Decision(query=query, category="General", mode="rank")
             db.add(decision)
@@ -187,6 +189,7 @@ async def decide(request: Request, db: Session = Depends(get_db)):
             return RedirectResponse(url=f"/rank/{decision.id}/review", status_code=303)
 
     # Continue as CHOOSE
+    enforce_decision_size(len(alternatives), len(UNIVERSAL_METRICS))
     decision = Decision(query=query, category=category)
     db.add(decision)
     db.flush()

@@ -6,7 +6,9 @@ from sqlalchemy.orm import Session
 
 from database import get_db
 from models import Activity, ActivityWeight, AlternativeScore, Decision, Metric
+from services.decision_limits import enforce_decision_size
 from services.parser import extract_subject
+from services.robustness import build_decision_robustness
 from services.scoring import (
     compute_alternative_fit_scores,
     compute_dimension_scores,
@@ -202,6 +204,8 @@ async def evaluate_refine(
                 }
             )
         j += 1
+
+    enforce_decision_size(1, len(metric_items))
 
     if not metric_items:
         from services.ontology import UNIVERSAL_METRICS
@@ -435,6 +439,7 @@ async def evaluate_result(
                 "series": [],
                 "dimension_scores": [],
                 "gap_analysis_result": None,
+                "robustness": None,
                 "significance": None,
                 "active_page": "decisions",
             },
@@ -442,6 +447,7 @@ async def evaluate_result(
 
     # Compute fit scores
     results = compute_alternative_fit_scores(decision_id, db)
+    robustness = build_decision_robustness(decision_id, db)
 
     # Compute dimension breakdown
     dim_scores = compute_dimension_scores(decision_id, db)
@@ -519,6 +525,7 @@ async def evaluate_result(
             "results": results,
             "dimension_scores": dim_scores,
             "gap_analysis_result": gap_result,
+            "robustness": robustness,
             "significance": None,
             "active_page": "decisions",
         },

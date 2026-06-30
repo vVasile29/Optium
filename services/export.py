@@ -3,9 +3,9 @@ import json
 from sqlalchemy.orm import Session
 
 from models import Activity, ActivityWeight, AlternativeScore, Decision, Metric
+from services.robustness import build_decision_robustness
 from services.scoring import (
     apply_ko_criteria,
-    build_significance_summary,
     compute_alternative_fit_scores,
     filter_by_thresholds,
 )
@@ -37,28 +37,6 @@ def _parse_json_list(value: str | None) -> list:
     except (json.JSONDecodeError, TypeError):
         return []
     return parsed if isinstance(parsed, list) else []
-
-
-def _build_significance(
-    results: list[dict],
-    metrics: list[Metric],
-    scores_by_activity: dict[int, dict[int, float]],
-) -> dict | None:
-    if len(results) < 2 or len(metrics) < 2:
-        return None
-    winner = results[0]
-    runner = results[1]
-    metric_ids = [m.id for m in metrics]
-    winner_scores = scores_by_activity.get(winner["activity_id"], {})
-    runner_scores = scores_by_activity.get(runner["activity_id"], {})
-    return build_significance_summary(
-        winner["activity_name"],
-        runner["activity_name"],
-        [winner_scores.get(metric_id, 0) for metric_id in metric_ids],
-        [runner_scores.get(metric_id, 0) for metric_id in metric_ids],
-        winner["fit_score"] * 100,
-        runner["fit_score"] * 100,
-    )
 
 
 def get_decision_export_data(decision_id: int, db: Session) -> dict | None:
@@ -147,7 +125,12 @@ def get_decision_export_data(decision_id: int, db: Session) -> dict | None:
         ],
         "results": results,
         "series": series,
-        "significance": _build_significance(result_basis, metrics, scores_by_activity),
+        "robustness": build_decision_robustness(
+            decision_id,
+            db,
+            activity_ids=[result["activity_id"] for result in result_basis],
+        ),
+        "significance": None,
         "ko_result": apply_ko_criteria(decision_id, db),
         "rows": rows,
         "thresholds": thresholds,
@@ -193,20 +176,33 @@ def generate_markdown_brief(data: dict) -> str:
                 f"- {metric_name} {threshold.get('operator', '<=')} {threshold.get('value')}"
             )
 
-    significance = data.get("significance")
-    if significance:
+    robustness = data.get("robustness")
+    if robustness:
+        top_two = robustness.get("top_two")
         lines.extend(
             [
                 "",
-                "## Statistical Significance",
-                f"- Result: {significance['label']}",
-                f"- Compared: {significance['winner_name']} ({significance['winner_avg']}%) vs {significance['runner_name']} ({significance['runner_avg']}%)",
-                f"- t-statistic: {significance['t_statistic']}",
-                f"- df: {significance['df']}",
-                f"- p-value: {significance['p_value']}",
-                f"- Mean difference: {significance.get('mean_diff')}",
+                "## Decision Robustness",
+                "Stochastic MCDA sensitivity analysis perturbs each alternative's weights and scores, then recomputes weighted additive rankings.",
+                f"- Winner: {robustness['winner_name']}",
+                f"- Robustness: {robustness['winner_robustness_percent']}% ({robustness['robustness_label']})",
+                f"- Winner changed: {robustness['winner_changed_percent']}% of simulations",
+                f"- Simulations: {robustness['simulations']}",
             ]
         )
+        if top_two:
+            interval = top_two["interval_95"]
+            lines.extend(
+                [
+                    f"- Mean top-two advantage: {top_two['mean_difference']}",
+                    f"- 95% interval: {interval['lower']} to {interval['upper']}",
+                ]
+            )
+        lines.append("- First-rank acceptability:")
+        for item in robustness.get("rank_acceptability", []):
+            lines.append(
+                f"  - {item['activity_name']}: {item['first_rank_percent']}%"
+            )
 
     lines.extend(
         [

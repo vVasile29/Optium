@@ -9,9 +9,10 @@ from sqlalchemy.orm import Session
 
 from database import get_db
 from models import Activity, ActivityWeight, AlternativeScore, Decision, Metric
+from services.decision_limits import enforce_decision_size
 from services.parser import extract_thresholds_detailed
+from services.robustness import build_decision_robustness
 from services.scoring import (
-    build_significance_summary,
     filter_by_thresholds,
 )
 
@@ -52,23 +53,9 @@ def safe_delete_redirect(redirect: str | None) -> str:
     return redirect if redirect in {"/", "/screen"} else "/"
 
 
-def _significance_for_results(results, series, metrics):
-    if len(results) < 2 or len(metrics) < 2:
-        return None
-    top_1 = results[0]
-    top_2 = results[1]
-    series_by_name = {s["name"]: s["scores"] for s in series}
-    scores_1 = series_by_name.get(top_1["activity_name"])
-    scores_2 = series_by_name.get(top_2["activity_name"])
-    if scores_1 is None or scores_2 is None:
-        return None
-    return build_significance_summary(
-        top_1["activity_name"],
-        top_2["activity_name"],
-        scores_1,
-        scores_2,
-        top_1["fit_score"] * 100,
-        top_2["fit_score"] * 100,
+def _robustness_for_results(decision_id, db, results):
+    return build_decision_robustness(
+        decision_id, db, activity_ids=[result["activity_id"] for result in results]
     )
 
 
@@ -95,6 +82,8 @@ async def screen_create(request: Request, db: Session = Depends(get_db)):
                 "active_page": "home",
             },
         )
+
+    enforce_decision_size(2, len(UNIVERSAL_METRICS))
 
     # Extract thresholds from query (with validation metadata)
     detailed = extract_thresholds_detailed(query)
@@ -323,6 +312,8 @@ async def screen_refine(
                         f"Invalid threshold value '{t_val}' (must be a number)."
                     )
         j += 1
+
+    enforce_decision_size(len(alternatives), len(metric_items))
 
     # If threshold validation failed, re-render review with errors
     if threshold_errors:
@@ -595,6 +586,7 @@ async def screen_result(
                 "metric_names": [],
                 "series": [],
                 "rows": [],
+                "robustness": None,
                 "significance": None,
                 "active_page": "decisions",
             },
@@ -658,9 +650,8 @@ async def screen_result(
                 row["scores"][act.id] = alt_s.score
         rows.append(row)
 
-    # Statistical significance on survivor rankings
     survivor_results = filter_result.get("survivor_results", [])
-    significance = _significance_for_results(survivor_results, series, metrics)
+    robustness = _robustness_for_results(decision_id, db, survivor_results)
 
     return templates.TemplateResponse(
         request,
@@ -676,7 +667,8 @@ async def screen_result(
             "series": series,
             "rows": rows,
             "results": survivor_results,
-            "significance": significance,
+            "robustness": robustness,
+            "significance": None,
             "active_page": "decisions",
         },
     )

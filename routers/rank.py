@@ -8,8 +8,10 @@ from sqlalchemy.orm import Session
 
 from database import get_db
 from models import Activity, ActivityWeight, AlternativeScore, Decision, Metric
+from services.decision_limits import enforce_decision_size
 from services.parser import extract_list
-from services.scoring import build_significance_summary, compute_alternative_fit_scores
+from services.robustness import build_decision_robustness
+from services.scoring import compute_alternative_fit_scores
 
 router = APIRouter(prefix="/rank", tags=["rank"])
 
@@ -44,23 +46,9 @@ class JsonTemplates:
 templates = JsonTemplates()
 
 
-def _significance_for_results(results, series, metrics):
-    if len(results) < 2 or len(metrics) < 2:
-        return None
-    top_1 = results[0]
-    top_2 = results[1]
-    series_by_name = {s["name"]: s["scores"] for s in series}
-    scores_1 = series_by_name.get(top_1["activity_name"])
-    scores_2 = series_by_name.get(top_2["activity_name"])
-    if scores_1 is None or scores_2 is None:
-        return None
-    return build_significance_summary(
-        top_1["activity_name"],
-        top_2["activity_name"],
-        scores_1,
-        scores_2,
-        top_1["fit_score"] * 100,
-        top_2["fit_score"] * 100,
+def _robustness_for_results(decision_id, db, results):
+    return build_decision_robustness(
+        decision_id, db, activity_ids=[result["activity_id"] for result in results]
     )
 
 
@@ -99,6 +87,7 @@ async def rank_create(request: Request, db: Session = Depends(get_db)):
 
     # Create activities (minimum 3 placeholders if not parsed)
     alt_names = alternatives if alternatives else ["Option A", "Option B", "Option C"]
+    enforce_decision_size(len(alt_names), len(UNIVERSAL_METRICS))
     for name in alt_names:
         activity = Activity(
             name=name,
@@ -229,6 +218,8 @@ async def rank_refine(
                 }
             )
         j += 1
+
+    enforce_decision_size(len(alternatives), len(metric_items))
 
     if not alternatives or not metric_items:
         from services.ontology import UNIVERSAL_METRICS
@@ -451,7 +442,7 @@ async def rank_score(request: Request, decision_id: int, db: Session = Depends(g
 async def rank_result(
     request: Request, decision_id: int, db: Session = Depends(get_db)
 ):
-    """Result page — reuses decision_result.html (ranking + radar + t-test)."""
+    """Result page — reuses decision_result.html (ranking + radar + robustness)."""
     decision = db.query(Decision).filter(Decision.id == decision_id).first()
     if not decision:
         raise HTTPException(status_code=404, detail="Ranking not found")
@@ -485,6 +476,7 @@ async def rank_result(
                 "metric_names": [],
                 "series": [],
                 "rows": [],
+                "robustness": None,
                 "significance": None,
                 "active_page": "decisions",
             },
@@ -547,8 +539,7 @@ async def rank_result(
                 row["scores"][act.id] = alt_s.score
         rows.append(row)
 
-    # Statistical significance
-    significance = _significance_for_results(results, series, metrics)
+    robustness = _robustness_for_results(decision_id, db, results)
 
     return templates.TemplateResponse(
         request,
@@ -563,7 +554,8 @@ async def rank_result(
             "series": series,
             "rows": rows,
             "results": results,
-            "significance": significance,
+            "robustness": robustness,
+            "significance": None,
             "active_page": "decisions",
         },
     )

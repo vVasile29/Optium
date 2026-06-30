@@ -70,19 +70,40 @@ export interface ScoreRow {
   scores: Record<number, number>;
 }
 
-export interface SignificanceData {
-  t_statistic: number;
-  df: number;
-  p_value: number;
-  label: string;
-  winner_avg: number;
-  runner_avg: number;
+export interface RobustnessData {
+  method: "weighted_additive_monte_carlo";
+  simulations: number;
+  seed: number | null;
+  weight_perturbation: {
+    type: "relative_uniform";
+    min_factor: number;
+    max_factor: number;
+  };
+  score_perturbation: {
+    type: "absolute_uniform";
+    min_delta: number;
+    max_delta: number;
+  };
+  winner_id: number;
   winner_name: string;
-  runner_name: string;
-  mean_diff: number;
-  std_diff: number;
-  num_criteria: number;
-  significant: boolean;
+  winner_robustness_percent: number;
+  winner_changed_percent: number;
+  robustness_label: string;
+  rank_acceptability: Array<{
+    activity_id: number;
+    activity_name: string;
+    first_rank_percent: number;
+  }>;
+  top_two: {
+    winner_id: number;
+    runner_up_id: number;
+    mean_difference: number;
+    interval_95: {
+      lower: number;
+      upper: number;
+      method: "empirical_percentile";
+    };
+  } | null;
 }
 
 // ── Thresholds ──
@@ -156,7 +177,8 @@ export interface DecisionDetail {
   series: SeriesData[];
   metric_names: string[];
   rows: ScoreRow[];
-  significance: SignificanceData | null;
+  robustness: RobustnessData | null;
+  significance: null;
   dimension_scores: DimensionScore[] | null;
   gap_analysis: GapAnalysis | null;
   filter_result: FilterResult | null;
@@ -242,7 +264,8 @@ export interface ScoreResponse {
   results: FitResult[];
   series: SeriesData[];
   metric_names: string[];
-  significance: SignificanceData | null;
+  robustness: RobustnessData | null;
+  significance: null;
 }
 
 export interface ThresholdsPayload {

@@ -14,7 +14,7 @@ import {
   ArrowRight,
 } from "lucide-react";
 import RadarChart from "@/components/RadarChart";
-import SignificanceBadge from "@/components/SignificanceBadge";
+import DecisionRobustnessCard from "@/components/DecisionRobustnessCard";
 import ThresholdPanel from "@/components/ThresholdPanel";
 import ExportButton from "@/components/ExportButton";
 import type { FitResult } from "@/types";
@@ -258,8 +258,7 @@ export default function Results() {
         />
       )}
 
-      {/* ── Statistical Significance (only for multi-alternative) ── */}
-      {!isSingle && <SignificanceBadge significance={data.significance} />}
+      {!isSingle && <DecisionRobustnessCard robustness={data.robustness} />}
 
       {/* ── Radar Chart ── */}
       {data.metric_names.length > 0 && data.series.length > 0 && (

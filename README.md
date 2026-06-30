@@ -11,6 +11,7 @@ Type a question like "should I buy a house or an apartment?", "rank Python, Java
 - **Universal criteria framework** — 6 value dimensions (Financial, Quality, Time, Risk, Experience, Convenience) with 12 curated metrics
 - **Interactive review** — see what the system parsed, add/remove alternatives, select criteria, adjust weights
 - **Weighted scoring** — per-(alternative, criterion) weights with 0–100 sliders
+- **Decision robustness** — Monte Carlo MCDA sensitivity analysis reports winner robustness and first-rank acceptability
 - **Post-hoc threshold filtering** — apply must-have thresholds on the result page to see pass/fail alternatives and ranked survivors
 - **Radar chart** — visualize how alternatives compare across all criteria
 - **Zero signup** — no accounts required; development uses local SQLite storage
@@ -116,6 +117,12 @@ Decision mode routing is automatic:
 - **Comparison** — two options → choose flow `/decisions/:id/`
 - **Ranking** — three or more options → `/rank/:id/`
 
+## Scoring and Robustness
+
+Optium uses a weighted additive MCDA model. Each alternative keeps its own criterion weights: `fit = Σ(score × weight) / Σ(weight) / 100`, with lower-is-better metrics inverted before aggregation.
+
+Result pages also compute server-side robustness with a local Monte Carlo sampler. Each simulation perturbs existing per-alternative weights by a relative uniform factor of 0.90–1.10 and scores by an absolute uniform delta of -5 to +5 points, clamps values to 0–100, recomputes rankings, and reports first-rank acceptability, winner-changed percentage, and a top-two advantage interval. This is stochastic MCDA sensitivity analysis, not a hypothesis test.
+
 ## Project Structure
 
 ```
@@ -131,6 +138,7 @@ Decision mode routing is automatic:
 ├── schemas.py               # Pydantic schemas
 ├── services/
 │   ├── scoring.py           # Score computation logic
+│   ├── robustness.py        # MCDA sensitivity analysis
 │   ├── ontology.py          # Universal criteria dimensions
 │   └── parser.py            # Free-text question parser
 ├── frontend/                # React SPA
@@ -145,6 +153,7 @@ Decision mode routing is automatic:
 └── tests/
     ├── test_ontology.py
     ├── test_parser.py
+    ├── test_robustness.py
     ├── test_scoring.py
     └── test_routes.py
 ```

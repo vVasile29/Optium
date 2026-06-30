@@ -17,7 +17,7 @@ import {
   Info,
 } from "lucide-react";
 import RadarChart from "@/components/RadarChart";
-import SignificanceBadge from "@/components/SignificanceBadge";
+import DecisionRobustnessCard from "@/components/DecisionRobustnessCard";
 import ExportButton from "@/components/ExportButton";
 import type { DecisionDetail, FitResult } from "@/types";
 import { recomputeFitScores } from "@/lib/scoring";
@@ -371,9 +371,8 @@ export default function ScreenResult() {
         </Card>
       )}
 
-      {/* ── Statistical Significance (survivor rankings) ── */}
-      {survivors.length >= 2 && (
-        <SignificanceBadge significance={data.significance} />
+      {survivors.length >= 1 && (
+        <DecisionRobustnessCard robustness={data.robustness} />
       )}
 
       {/* ── Radar Chart (all alternatives) ── */}

@@ -11,7 +11,6 @@ from models import Decision, Activity, ActivityWeight, Metric, AlternativeScore
 from services.scoring import (
     compute_alternative_fit_scores,
     filter_by_thresholds,
-    paired_t_test,
 )
 
 
@@ -298,46 +297,6 @@ def test_no_weights_skipped(db):
     db.commit()
     results = compute_alternative_fit_scores(decision.id, db)
     assert len(results) == 0  # skipped because no weights
-
-
-# ── Paired t-test tests ──
-
-
-def test_paired_t_test_highly_significant():
-    result = paired_t_test([98, 96, 97, 95, 99], [40, 42, 41, 43, 39])
-    assert result["significant"] is True
-    assert result["p_value"] < 0.01
-
-
-def test_paired_t_test_single_alternative_no_significance():
-    result = paired_t_test([85], [70])
-    assert "error" in result
-    assert "Need at least 2" in result["error"]
-
-
-def test_paired_t_test_equal_scores():
-    result = paired_t_test([50, 60, 70, 80], [50, 60, 70, 80])
-    assert result["t_statistic"] == 0.0
-    assert result["p_value"] == 1.0
-    assert result["significant"] is False
-
-
-def test_paired_t_test_marginally_significant():
-    result = paired_t_test([53, 53, 53, 53, 62], [50, 50, 50, 50, 50])
-    assert 0.05 <= result["p_value"] < 0.10
-    assert result["significant"] is False
-
-
-def test_paired_t_test_not_significant():
-    result = paired_t_test([62, 55, 70, 61], [60, 58, 68, 63])
-    assert result["p_value"] >= 0.10
-    assert result["significant"] is False
-
-
-def test_paired_t_test_equal_scores_p_value_not_zero_regression():
-    result = paired_t_test([51, 49, 70, 70], [51, 49, 70, 70])
-    assert result["p_value"] != 0.0
-    assert result["significant"] is False
 
 
 def test_sorting_order(db):

@@ -13,9 +13,10 @@ from sqlalchemy.orm import Session
 from database import get_db
 from models import Activity, ActivityWeight, AlternativeScore, Decision, Metric
 from schemas import MetricCreate, MetricUpdate
+from services.decision_limits import enforce_decision_size
 from services.export import generate_markdown_brief, get_decision_export_data
+from services.robustness import build_decision_robustness
 from services.scoring import (
-    build_significance_summary,
     compute_alternative_fit_scores,
     compute_dimension_scores,
     filter_by_thresholds,
@@ -45,26 +46,9 @@ def _review_url(decision: Decision) -> str:
     }.get(mode, f"/decisions/{decision.id}/review")
 
 
-def _significance_for_results(
-    results: list, series: list, metrics: list
-) -> dict | None:
-    if len(results) < 2 or len(metrics) < 2:
-        return None
-    top_1 = results[0]
-    top_2 = results[1]
-    series_by_name = {s["name"]: s["scores"] for s in series}
-    scores_1 = series_by_name.get(top_1["activity_name"])
-    scores_2 = series_by_name.get(top_2["activity_name"])
-    if scores_1 is None or scores_2 is None:
-        return None
-    return build_significance_summary(
-        top_1["activity_name"],
-        top_2["activity_name"],
-        scores_1,
-        scores_2,
-        top_1["fit_score"] * 100,
-        top_2["fit_score"] * 100,
-    )
+def _robustness_for_results(decision_id: int, db: Session, results: list) -> dict | None:
+    activity_ids = [result["activity_id"] for result in results]
+    return build_decision_robustness(decision_id, db, activity_ids=activity_ids)
 
 
 def _parse_thresholds(decision: Decision) -> list:
@@ -134,6 +118,7 @@ def _build_decision_detail(
         "series": [],
         "metric_names": [],
         "rows": [],
+        "robustness": None,
         "significance": None,
         "dimension_scores": None,
         "gap_analysis": None,
@@ -227,14 +212,17 @@ def _build_decision_detail(
         result["dimension_scores"] = dim_scores
         result["gap_analysis"] = gap_analysis(dim_scores) if dim_scores else None
 
-    # Statistical significance
-    result["significance"] = _significance_for_results(results, series, metrics)
+    result["robustness"] = _robustness_for_results(decision_id, db, results)
+    result["significance"] = None
 
     # Threshold filtering
     thresholds = _parse_thresholds(decision)
     if thresholds or force_filter:
         filter_result = filter_by_thresholds(decision_id, db)
         result["filter_result"] = filter_result
+        result["robustness"] = _robustness_for_results(
+            decision_id, db, filter_result.get("survivor_results", [])
+        )
 
         # Build threshold_criteria
         threshold_criteria = []
@@ -321,6 +309,7 @@ def decide(body: dict, db: Session = Depends(get_db)):
         # If DIAGNOSE didn't match, try RANK
         list_parsed = extract_list(query)
         if list_parsed["parsed"]:
+            enforce_decision_size(len(list_parsed["alternatives"]), len(UNIVERSAL_METRICS))
             decision = Decision(query=query, category="General", mode="rank")
             db.add(decision)
             db.flush()
@@ -341,6 +330,7 @@ def decide(body: dict, db: Session = Depends(get_db)):
             }
 
     # Continue as CHOOSE
+    enforce_decision_size(len(alternatives), len(UNIVERSAL_METRICS))
     decision = Decision(query=query, category=category)
     db.add(decision)
     db.flush()
@@ -419,6 +409,7 @@ def refine_decision(
         )
     if not metrics_input:
         raise HTTPException(status_code=422, detail="At least one metric is required")
+    enforce_decision_size(len(alternatives), len(metrics_input))
 
     # Delete old activities and their weights/scores
     for activity in decision.activities:
@@ -552,14 +543,14 @@ def score_decision(
             }
         )
 
-    # Significance
-    significance = _significance_for_results(results, series, metrics)
+    robustness = _robustness_for_results(decision_id, db, results)
 
     return {
         "results": results,
         "series": series,
         "metric_names": metric_names,
-        "significance": significance,
+        "robustness": robustness,
+        "significance": None,
     }
 
 

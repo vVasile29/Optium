@@ -7,8 +7,9 @@ from sqlalchemy.orm import Session
 
 from database import get_db
 from models import Activity, ActivityWeight, AlternativeScore, Decision, Metric
+from services.decision_limits import enforce_decision_size
+from services.robustness import build_decision_robustness
 from services.scoring import (
-    build_significance_summary,
     compute_alternative_fit_scores,
     filter_by_thresholds,
 )
@@ -62,23 +63,9 @@ def safe_delete_redirect(redirect: str | None) -> str:
     return redirect if redirect in {"/", "/decisions"} else "/"
 
 
-def _significance_for_results(results, series, metrics):
-    if len(results) < 2 or len(metrics) < 2:
-        return None
-    top_1 = results[0]
-    top_2 = results[1]
-    series_by_name = {s["name"]: s["scores"] for s in series}
-    scores_1 = series_by_name.get(top_1["activity_name"])
-    scores_2 = series_by_name.get(top_2["activity_name"])
-    if scores_1 is None or scores_2 is None:
-        return None
-    return build_significance_summary(
-        top_1["activity_name"],
-        top_2["activity_name"],
-        scores_1,
-        scores_2,
-        top_1["fit_score"] * 100,
-        top_2["fit_score"] * 100,
+def _robustness_for_results(decision_id, db, results):
+    return build_decision_robustness(
+        decision_id, db, activity_ids=[result["activity_id"] for result in results]
     )
 
 
@@ -132,6 +119,8 @@ async def refine_decision(
                 }
             )
         j += 1
+
+    enforce_decision_size(len(alternatives), len(metric_items))
 
     if not alternatives or not metric_items:
         # Re-render with error — enrich metrics with DB IDs
@@ -413,9 +402,6 @@ async def decision_result(
                 row["scores"][act.id] = alt_s.score
         rows.append(row)
 
-    # ── Statistical significance (paired t-test of top 2 alternatives) ──
-    significance = _significance_for_results(results, series, metrics)
-
     # ── Threshold-based filtering (post-hoc) ──
     filter_result = None
     threshold_criteria = []
@@ -466,6 +452,11 @@ async def decision_result(
     if existing_thresholds:
         filter_result = filter_by_thresholds(decision_id, db)
 
+    robustness_results = (
+        filter_result.get("survivor_results", []) if filter_result else results
+    )
+    robustness = _robustness_for_results(decision_id, db, robustness_results)
+
     return templates.TemplateResponse(
         request,
         "decision_result.html",
@@ -479,7 +470,8 @@ async def decision_result(
             "series": series,
             "rows": rows,
             "results": results,
-            "significance": significance,
+            "robustness": robustness,
+            "significance": None,
             "filter_result": filter_result,
             "threshold_criteria": threshold_criteria,
             "threshold_errors": threshold_errors,
@@ -763,8 +755,6 @@ async def _render_result_with_threshold_errors(
                 row["scores"][act.id] = alt_s.score
         rows.append(row)
 
-    significance = _significance_for_results(results, series, metrics)
-
     # Build threshold_criteria from form values + stored thresholds
     filter_result = None
     if decision.thresholds:
@@ -775,6 +765,11 @@ async def _render_result_with_threshold_errors(
                 filter_result = filter_by_thresholds(decision_id, db)
         except (json.JSONDecodeError, TypeError):
             pass
+
+    robustness_results = (
+        filter_result.get("survivor_results", []) if filter_result else results
+    )
+    robustness = _robustness_for_results(decision_id, db, robustness_results)
 
     threshold_criteria = []
     metric_ids_with_weights = set()
@@ -826,7 +821,8 @@ async def _render_result_with_threshold_errors(
             "series": series,
             "rows": rows,
             "results": results,
-            "significance": significance,
+            "robustness": robustness,
+            "significance": None,
             "filter_result": filter_result,
             "threshold_criteria": threshold_criteria,
             "threshold_errors": threshold_errors,

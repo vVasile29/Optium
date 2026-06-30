@@ -14,6 +14,8 @@ from sqlalchemy.orm import sessionmaker
 
 from database import Base, get_db
 from main import app
+from models import Decision, Metric
+from services.decision_limits import MAX_DECISION_ALTERNATIVES, MAX_DECISION_METRICS
 
 # Per-test state
 _test_db_path = None
@@ -109,6 +111,121 @@ def test_list_metrics(client, db):
     """Test metrics page loads."""
     response = client.get("/metrics")
     assert response.status_code == 200
+
+
+def test_api_refine_rejects_too_many_selected_metrics(client, db):
+    decision = Decision(query="Pick one", category="General")
+    db.add(decision)
+    db.commit()
+    metrics = db.query(Metric).limit(MAX_DECISION_METRICS).all()
+    for index in range(MAX_DECISION_METRICS + 1 - len(metrics)):
+        metric = Metric(name=f"Extra Limit Metric {index}", category="General")
+        db.add(metric)
+        db.flush()
+        metrics.append(metric)
+    db.commit()
+
+    response = client.post(
+        f"/api/decisions/{decision.id}/refine",
+        json={
+            "alternatives": ["A", "B"],
+            "metrics": [
+                {"metric_id": metric.id, "weight": 50}
+                for metric in metrics[: MAX_DECISION_METRICS + 1]
+            ],
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_decision_refine_rejects_too_many_alternatives(client, db):
+    decision = Decision(query="Pick one", category="General")
+    db.add(decision)
+    db.commit()
+    metric = db.query(Metric).first()
+    form = {
+        f"alt_name_{index}": f"Option {index}"
+        for index in range(MAX_DECISION_ALTERNATIVES + 1)
+    }
+    form.update(
+        {
+            "metric_id_0": str(metric.id),
+            "include_metric_0": "on",
+            "criterion_weight_0": "50",
+            "criterion_higher_0": "true",
+        }
+    )
+
+    response = client.post(f"/decisions/{decision.id}/refine", data=form)
+
+    assert response.status_code == 422
+
+
+def test_api_decide_rejects_too_many_parsed_alternatives(client, db):
+    query = ", ".join(
+        f"Option {index}" for index in range(MAX_DECISION_ALTERNATIVES + 1)
+    )
+
+    response = client.post("/api/decide", json={"q": query})
+
+    assert response.status_code == 422
+
+
+def test_rank_create_rejects_too_many_parsed_alternatives(client, db):
+    query = ", ".join(
+        f"Option {index}" for index in range(MAX_DECISION_ALTERNATIVES + 1)
+    )
+
+    response = client.post("/rank", data={"q": query})
+
+    assert response.status_code == 422
+
+
+def test_rank_refine_rejects_too_many_alternatives(client, db):
+    decision = Decision(query="Rank", category="General", mode="rank")
+    db.add(decision)
+    db.commit()
+    metric = db.query(Metric).first()
+    form = {
+        f"alt_name_{index}": f"Option {index}"
+        for index in range(MAX_DECISION_ALTERNATIVES + 1)
+    }
+    form.update(
+        {
+            "metric_id_0": str(metric.id),
+            "include_metric_0": "on",
+            "criterion_weight_0": "50",
+            "criterion_higher_0": "true",
+        }
+    )
+
+    response = client.post(f"/rank/{decision.id}/refine", data=form)
+
+    assert response.status_code == 422
+
+
+def test_screen_refine_rejects_too_many_alternatives(client, db):
+    decision = Decision(query="Screen", category="General", mode="screen")
+    db.add(decision)
+    db.commit()
+    metric = db.query(Metric).first()
+    form = {
+        f"alt_name_{index}": f"Option {index}"
+        for index in range(MAX_DECISION_ALTERNATIVES + 1)
+    }
+    form.update(
+        {
+            "metric_id_0": str(metric.id),
+            "include_metric_0": "on",
+            "criterion_weight_0": "50",
+            "criterion_higher_0": "true",
+        }
+    )
+
+    response = client.post(f"/screen/{decision.id}/refine", data=form)
+
+    assert response.status_code == 422
 
 
 def test_delete_metric(client, db):
@@ -629,6 +746,30 @@ def test_evaluate_flow(client, db):
         api_data = api_result.json()
         assert "results" in api_data
         assert "Python" in str(api_data)
+
+
+def test_evaluate_result_returns_single_option_robustness(client, db):
+    decision = _seed_scored_decision(db, "diagnose")
+
+    response = client.get(f"/evaluate/{decision.id}/result")
+    assert response.status_code == 200
+    data = response.json()
+    robustness = data["robustness"]
+
+    assert robustness["method"] == "weighted_additive_monte_carlo"
+    assert robustness["winner_id"] == decision.activities[0].id
+    assert robustness["winner_robustness_percent"] == 100.0
+    assert robustness["winner_changed_percent"] == 0.0
+    assert robustness["robustness_label"] == "Very High"
+    assert robustness["top_two"] is None
+    assert robustness["rank_acceptability"] == [
+        {
+            "activity_id": decision.activities[0].id,
+            "activity_name": "Solo",
+            "first_rank_percent": 100.0,
+        }
+    ]
+    assert data["significance"] is None
 
 
 def test_evaluate_not_found(client, db):
@@ -1167,7 +1308,109 @@ def test_decision_threshold_criteria_prepopulation(client, db):
     assert "75" in str(result_data.get("threshold_criteria", []))
 
 
-# ── Markdown export + significance + slider polish tests ──
+def test_decision_result_robustness_uses_saved_threshold_survivors(client, db):
+    decision = _seed_scored_decision(db, "choose")
+
+    from models import Activity, ActivityWeight, AlternativeScore, Decision
+
+    winner = decision.activities[0]
+    winner_scores = (
+        db.query(AlternativeScore)
+        .filter(AlternativeScore.activity_id == winner.id)
+        .all()
+    )
+    metric_id = winner_scores[0].metric_id
+
+    third = Activity(name="Filtered", category="General", decision_id=decision.id)
+    db.add(third)
+    db.flush()
+    for weight in winner.weights:
+        db.add(
+            ActivityWeight(
+                activity_id=third.id, metric_id=weight.metric_id, weight=weight.weight
+            )
+        )
+    for score in winner_scores:
+        mid = score.metric_id
+        db.add(AlternativeScore(activity_id=third.id, metric_id=mid, score=95))
+
+    stored = db.query(Decision).filter(Decision.id == decision.id).first()
+    stored.thresholds = '[{"metric_id": %d, "operator": "<=", "value": 80}]' % metric_id
+    db.commit()
+
+    response = client.get(f"/decisions/{decision.id}/result")
+    assert response.status_code == 200
+    data = response.json()
+
+    survivor_ids = {
+        result["activity_id"] for result in data["filter_result"]["survivor_results"]
+    }
+    robust_ids = {
+        item["activity_id"] for item in data["robustness"]["rank_acceptability"]
+    }
+    assert len(survivor_ids) == 1
+    assert robust_ids == survivor_ids
+    assert data["robustness"]["top_two"] is None
+    assert data["robustness"]["winner_robustness_percent"] == 100.0
+
+
+def test_decision_result_robustness_handles_no_threshold_survivors(client, db):
+    decision = _seed_scored_decision(db, "choose")
+
+    from models import AlternativeScore, Decision
+
+    score = (
+        db.query(AlternativeScore)
+        .filter(AlternativeScore.activity_id == decision.activities[0].id)
+        .first()
+    )
+    metric_id = score.metric_id
+
+    stored = db.query(Decision).filter(Decision.id == decision.id).first()
+    stored.thresholds = '[{"metric_id": %d, "operator": "<=", "value": 10}]' % metric_id
+    db.commit()
+
+    response = client.get(f"/decisions/{decision.id}/result")
+    assert response.status_code == 200
+    data = response.json()
+
+    assert data["filter_result"]["survivor_results"] == []
+    assert data["robustness"] is None
+
+
+def test_decision_invalid_threshold_form_uses_saved_threshold_survivors(client, db):
+    decision = _seed_scored_decision(db, "choose")
+
+    from models import AlternativeScore, Decision
+
+    score = (
+        db.query(AlternativeScore)
+        .filter(AlternativeScore.activity_id == decision.activities[0].id)
+        .first()
+    )
+    metric_id = score.metric_id
+
+    stored = db.query(Decision).filter(Decision.id == decision.id).first()
+    stored.thresholds = '[{"metric_id": %d, "operator": "<=", "value": 10}]' % metric_id
+    db.commit()
+
+    response = client.post(
+        f"/decisions/{decision.id}/thresholds",
+        data={
+            "threshold_metric_id_0": str(metric_id),
+            "threshold_op_0": "<=",
+            "threshold_val_0": "not-a-number",
+        },
+    )
+    assert response.status_code == 200
+    data = response.json()
+
+    assert data["threshold_errors"]
+    assert data["filter_result"]["survivor_results"] == []
+    assert data["robustness"] is None
+
+
+# ── Markdown export + robustness + slider polish tests ──
 
 
 def _seed_scored_decision(db, mode="choose"):
@@ -1221,8 +1464,7 @@ def _seed_scored_decision(db, mode="choose"):
 def test_export_markdown_endpoint(client, db):
     """Export markdown works via consolidated /api endpoint.
     
-    For `choose` mode (2+ alternatives), the brief includes Statistical Significance.
-    For `diagnose` mode (single alternative), the brief should not include it.
+    For scored decisions, the brief includes MCDA robustness analysis.
     """
     choose = _seed_scored_decision(db, "choose")
     diagnose = _seed_scored_decision(db, "diagnose")
@@ -1233,7 +1475,9 @@ def test_export_markdown_endpoint(client, db):
     assert resp.headers["content-type"].startswith("text/markdown")
     assert "attachment" in resp.headers["content-disposition"]
     assert "Decision Brief" in resp.text
-    assert "Statistical Significance" in resp.text
+    assert "Decision Robustness" in resp.text
+    assert "p-value" not in resp.text
+    assert "t-statistic" not in resp.text
 
     # ── diagnose mode export ──
     resp = client.get(f"/api/decisions/{diagnose.id}/export-markdown")
@@ -1241,23 +1485,23 @@ def test_export_markdown_endpoint(client, db):
     assert resp.headers["content-type"].startswith("text/markdown")
     assert "attachment" in resp.headers["content-disposition"]
     assert "Decision Brief" in resp.text
-    assert "Statistical Significance" not in resp.text
+    assert "Decision Robustness" in resp.text
+    assert "p-value" not in resp.text
 
     # ── non-existent decision ──
     resp = client.get("/api/decisions/99999/export-markdown")
     assert resp.status_code == 404
 
 
-def test_result_pages_use_significance_without_legacy_wording(client, db):
+def test_result_pages_include_robustness_and_null_compatibility_key(client, db):
     decision = _seed_scored_decision(db, "choose")
     response = client.get(f"/api/decisions/{decision.id}")
     assert response.status_code == 200
     data = response.json()
-    # The API response should include significance data
-    if data.get("significance"):
-        assert "p_value" in data["significance"] or "p-value" in str(
-            data["significance"]
-        )
+    assert data["robustness"]["method"] == "weighted_additive_monte_carlo"
+    assert data["significance"] is None
+    assert "p_value" not in str(data)
+    assert "t_statistic" not in str(data)
 
 
 def test_slider_fill_markup_and_sensitivity_classes(client, db):
