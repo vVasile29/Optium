@@ -55,16 +55,48 @@ export default function RadarChart({ labels, datasets }: RadarChartProps) {
       r: {
         beginAtZero: true,
         max: 100,
-        ticks: { stepSize: 20 },
+        ticks: {
+          stepSize: 20,
+          color: "hsl(var(--foreground))",
+          backdropColor: "transparent",
+          font: { size: 11 },
+        },
         grid: { color: "hsl(var(--border))" },
         angleLines: { color: "hsl(var(--border))" },
-        pointLabels: { color: "hsl(var(--foreground))" },
+        pointLabels: {
+          color: "hsl(var(--foreground))",
+          font: { size: 12, weight: "500" as const },
+        },
       },
     },
     plugins: {
       legend: {
         position: "bottom" as const,
-        labels: { color: "hsl(var(--foreground))" },
+        labels: {
+          color: "hsl(var(--foreground))",
+          font: { size: 12 },
+          usePointStyle: true,
+        },
+      },
+      tooltip: {
+        backgroundColor: "hsl(var(--popover))",
+        titleColor: "hsl(var(--popover-foreground))",
+        bodyColor: "hsl(var(--popover-foreground))",
+        borderColor: "hsl(var(--border))",
+        borderWidth: 1,
+        padding: 8,
+        cornerRadius: 6,
+        boxPadding: 4,
+        usePointStyle: true,
+        callbacks: {
+          labelColor: function (tooltipItem: any) {
+            const dataset = tooltipItem.dataset;
+            return {
+              backgroundColor: dataset.borderColor || "rgba(0,0,0,0)",
+              borderColor: dataset.borderColor || "rgba(0,0,0,0)",
+            };
+          },
+        },
       },
     },
   };
