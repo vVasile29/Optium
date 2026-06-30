@@ -104,10 +104,10 @@ Question Input
 
 - 6 value dimensions and 12 global metrics
 - Weighted-sum scoring
-- `Decision`, `Activity`, `DecisionWeight`, `AlternativeScore`, and legacy `ActivityWeight` models
+- `Decision`, `Activity`, `DecisionWeight`, `AlternativeScore` models
 - Metric manager CRUD
 - Radar chart presentation
-- Jinja2 + Alpine.js + Chart.js, with no npm build step
+- Chart.js radar chart presentation
 - User-controlled criteria, weights, and scores
 
 ### What Can Vary Internally

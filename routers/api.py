@@ -175,7 +175,7 @@ def _build_decision_detail(
             "metric_desc": m.description or "",
             "higher_is_better": m.higher_is_better,
             "weight": weight,
-            "weights": {},  # Kept for backward compatibility
+
             "scores": {},
         }
         for act in activities:

@@ -55,7 +55,7 @@ export function recomputeFitScores(
       const metric = metricByName[row.metric_name];
       const metricId = row.metric_id ?? metric?.id ?? 0;
       const higherIsBetter = row.higher_is_better ?? metric?.higher_is_better ?? true;
-      const baseWeight = row.weights ? row.weights[act.id] : row.weight;
+      const baseWeight = row.weight;
       if (baseWeight === undefined) continue;
       const weight = metricWeightOverrides[row.metric_name] ?? baseWeight;
       const score = row.scores[act.id] ?? 0;

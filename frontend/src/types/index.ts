@@ -25,13 +25,6 @@ export interface Metric {
   higher_is_better: boolean;
 }
 
-export interface ActivityWeight {
-  id: number;
-  activity_id: number;
-  metric_id: number;
-  weight: number;
-}
-
 export interface AlternativeScore {
   id: number;
   activity_id: number;
@@ -66,7 +59,6 @@ export interface ScoreRow {
   metric_desc: string;
   higher_is_better?: boolean;
   weight: number;
-  weights?: Record<number, number>;
   scores: Record<number, number>;
 }
 

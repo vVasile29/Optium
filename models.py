@@ -95,40 +95,12 @@ class Activity(Base):
 
     decision = relationship("Decision", back_populates="activities")
 
-    # DEPRECATED: Only kept for backward compatibility so the ORM can resolve
-    # ActivityWeight.activity → Activity.weights. No active code path creates this.
-    weights = relationship(
-        "ActivityWeight", back_populates="activity", cascade="all, delete-orphan"
-    )
-
     __table_args__ = (
         UniqueConstraint("name", "decision_id", name="uq_activity_name_decision"),
     )
 
     def __repr__(self):
         return f"<Activity(id={self.id}, name={self.name!r})>"
-
-
-# DEPRECATED: Legacy per-alternative weights. Use DecisionWeight instead.
-# Kept only for backward compatibility with existing database rows.
-# No active code path should create or query this model.
-class ActivityWeight(Base):
-    __tablename__ = "activity_weights"
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    activity_id = Column(Integer, ForeignKey("activities.id"), nullable=False)
-    metric_id = Column(Integer, ForeignKey("metrics.id"), nullable=False)
-    weight = Column(Float, nullable=False)  # 0.0–100.0
-
-    activity = relationship("Activity", back_populates="weights")
-    metric = relationship("Metric")
-
-    __table_args__ = (
-        UniqueConstraint("activity_id", "metric_id", name="uq_activity_metric"),
-    )
-
-    def __repr__(self):
-        return f"<ActivityWeight(activity={self.activity_id}, metric={self.metric_id}, weight={self.weight})>"
 
 
 class AlternativeScore(Base):

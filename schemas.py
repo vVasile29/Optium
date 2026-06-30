@@ -92,28 +92,6 @@ class ActivityOut(ActivityBase):
         from_attributes = True
 
 
-# ── ActivityWeight ──
-
-
-class WeightItem(BaseModel):
-    metric_id: int
-    weight: float = Field(ge=0.0, le=100.0)
-
-
-class WeightsUpsert(BaseModel):
-    weights: List[WeightItem]
-
-
-class ActivityWeightOut(BaseModel):
-    id: int
-    activity_id: int
-    metric_id: int
-    weight: float
-
-    class Config:
-        from_attributes = True
-
-
 # ── DecisionWeight ──
 
 
