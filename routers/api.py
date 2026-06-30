@@ -11,7 +11,7 @@ from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
 from database import get_db
-from models import Activity, ActivityWeight, AlternativeScore, Decision, Metric
+from models import Activity, DecisionWeight, AlternativeScore, Decision, Metric
 from schemas import MetricCreate, MetricUpdate
 from services.decision_limits import enforce_decision_size
 from services.export import generate_markdown_brief, get_decision_export_data
@@ -79,16 +79,12 @@ def _build_decision_detail(
 
     activities = db.query(Activity).filter(Activity.decision_id == decision_id).all()
 
-    # Get metrics from ActivityWeight for this decision's activities
-    activity_ids = [a.id for a in activities]
+    # Get metrics from DecisionWeight for this decision
     metric_ids = set()
-    if activity_ids:
-        for aw in (
-            db.query(ActivityWeight)
-            .filter(ActivityWeight.activity_id.in_(activity_ids))
-            .all()
-        ):
-            metric_ids.add(aw.metric_id)
+    for dw in (
+        db.query(DecisionWeight).filter(DecisionWeight.decision_id == decision_id).all()
+    ):
+        metric_ids.add(dw.metric_id)
     metrics = (
         db.query(Metric).filter(Metric.id.in_(metric_ids)).order_by(Metric.id).all()
         if metric_ids
@@ -162,18 +158,16 @@ def _build_decision_detail(
     rows = []
     for m in metrics:
         weight = 50
-        weights = {}
-        if activities:
-            aw = (
-                db.query(ActivityWeight)
-                .filter(
-                    ActivityWeight.activity_id == activities[0].id,
-                    ActivityWeight.metric_id == m.id,
-                )
-                .first()
+        dw = (
+            db.query(DecisionWeight)
+            .filter(
+                DecisionWeight.decision_id == decision_id,
+                DecisionWeight.metric_id == m.id,
             )
-            if aw:
-                weight = aw.weight
+            .first()
+        )
+        if dw:
+            weight = dw.weight
 
         row = {
             "metric_id": m.id,
@@ -181,20 +175,10 @@ def _build_decision_detail(
             "metric_desc": m.description or "",
             "higher_is_better": m.higher_is_better,
             "weight": weight,
-            "weights": weights,
+            "weights": {},  # Kept for backward compatibility
             "scores": {},
         }
         for act in activities:
-            aw = (
-                db.query(ActivityWeight)
-                .filter(
-                    ActivityWeight.activity_id == act.id,
-                    ActivityWeight.metric_id == m.id,
-                )
-                .first()
-            )
-            if aw:
-                row["weights"][act.id] = aw.weight
             for alt_s in (
                 db.query(AlternativeScore)
                 .filter(
@@ -264,16 +248,24 @@ def decide(body: dict, db: Session = Depends(get_db)):
     if not query:
         raise HTTPException(status_code=400, detail="Query cannot be empty")
 
-    # ── Helper: seed default weights for one activity ──
-    def _seed_default_weights(activity_id: int) -> None:
+    # ── Helper: seed default weights for a decision (decision-level) ──
+    def _seed_default_weights(decision_id: int) -> None:
+        # Idempotent: skip if DecisionWeight rows already exist
+        existing = (
+            db.query(DecisionWeight)
+            .filter(DecisionWeight.decision_id == decision_id)
+            .first()
+        )
+        if existing:
+            return
         all_metrics = db.query(Metric).all()
         metric_map = {m.name: m for m in all_metrics}
         for m in UNIVERSAL_METRICS:
             metric = metric_map.get(m["name"])
             if metric:
                 db.add(
-                    ActivityWeight(
-                        activity_id=activity_id,
+                    DecisionWeight(
+                        decision_id=decision_id,
                         metric_id=metric.id,
                         weight=m["default_weight"],
                     )
@@ -299,7 +291,7 @@ def decide(body: dict, db: Session = Depends(get_db)):
             )
             db.add(activity)
             db.flush()
-            _seed_default_weights(activity.id)
+            _seed_default_weights(decision.id)
             db.commit()
 
             return {
@@ -324,7 +316,7 @@ def decide(body: dict, db: Session = Depends(get_db)):
                 )
                 db.add(activity)
                 db.flush()
-                _seed_default_weights(activity.id)
+            _seed_default_weights(decision.id)
 
             db.commit()
             return {
@@ -347,7 +339,7 @@ def decide(body: dict, db: Session = Depends(get_db)):
         )
         db.add(activity)
         db.flush()
-        _seed_default_weights(activity.id)
+    _seed_default_weights(decision.id)
 
     db.commit()
 
@@ -415,18 +407,16 @@ def refine_decision(
         raise HTTPException(status_code=422, detail="At least one metric is required")
     enforce_decision_size(len(alternatives), len(metrics_input))
 
-    # Delete old activities and their weights/scores
+    # Delete old DecisionWeight rows, activities and their scores
+    db.query(DecisionWeight).filter(DecisionWeight.decision_id == decision_id).delete()
     for activity in decision.activities:
-        db.query(ActivityWeight).filter(
-            ActivityWeight.activity_id == activity.id
-        ).delete()
         db.query(AlternativeScore).filter(
             AlternativeScore.activity_id == activity.id
         ).delete()
         db.delete(activity)
     db.flush()
 
-    # Create activities and weights
+    # Create activities and decision-level weights
     new_activities = []
     for alt_name in alternatives:
         activity = Activity(
@@ -438,13 +428,13 @@ def refine_decision(
         db.flush()
         new_activities.append(activity)
 
-        for mitem in metrics_input:
-            aw = ActivityWeight(
-                activity_id=activity.id,
-                metric_id=mitem["metric_id"],
-                weight=mitem.get("weight", 50),
-            )
-            db.add(aw)
+    for mitem in metrics_input:
+        dw = DecisionWeight(
+            decision_id=decision_id,
+            metric_id=mitem["metric_id"],
+            weight=mitem.get("weight", 50),
+        )
+        db.add(dw)
 
     db.commit()
 
@@ -511,15 +501,11 @@ def score_decision(
 
     # Reload activities and metrics for the result
     activities = db.query(Activity).filter(Activity.decision_id == decision_id).all()
-    activity_ids = [a.id for a in activities]
     metric_ids = set()
-    if activity_ids:
-        for aw in (
-            db.query(ActivityWeight)
-            .filter(ActivityWeight.activity_id.in_(activity_ids))
-            .all()
-        ):
-            metric_ids.add(aw.metric_id)
+    for dw in (
+        db.query(DecisionWeight).filter(DecisionWeight.decision_id == decision_id).all()
+    ):
+        metric_ids.add(dw.metric_id)
     metrics = (
         db.query(Metric).filter(Metric.id.in_(metric_ids)).order_by(Metric.id).all()
         if metric_ids
@@ -610,16 +596,11 @@ def apply_thresholds(
     filter_result = filter_by_thresholds(decision_id, db) if validated else None
 
     # Build threshold_criteria
-    activities = db.query(Activity).filter(Activity.decision_id == decision_id).all()
-    activity_ids = [a.id for a in activities]
     metric_ids = set()
-    if activity_ids:
-        for aw in (
-            db.query(ActivityWeight)
-            .filter(ActivityWeight.activity_id.in_(activity_ids))
-            .all()
-        ):
-            metric_ids.add(aw.metric_id)
+    for dw in (
+        db.query(DecisionWeight).filter(DecisionWeight.decision_id == decision_id).all()
+    ):
+        metric_ids.add(dw.metric_id)
 
     threshold_criteria = []
     existing_by_metric = {}
@@ -765,8 +746,8 @@ def delete_metric(metric_id: int, db: Session = Depends(get_db)):
     metric = db.query(Metric).filter(Metric.id == metric_id).first()
     if not metric:
         raise HTTPException(status_code=404, detail="Metric not found")
-    # Delete related activity weights
-    db.query(ActivityWeight).filter(ActivityWeight.metric_id == metric_id).delete()
+    # Delete related decision weights
+    db.query(DecisionWeight).filter(DecisionWeight.metric_id == metric_id).delete()
     # Delete sub-metrics first
     db.query(Metric).filter(Metric.parent_id == metric_id).delete()
     db.delete(metric)
@@ -788,7 +769,7 @@ def delete_decision(decision_id: int, db: Session = Depends(get_db)):
             AlternativeScore.activity_id.in_(activity_ids)
         ).delete()
 
-    db.delete(decision)  # cascades to Activity → ActivityWeight
+    db.delete(decision)  # cascades to DecisionWeight via ORM
     db.commit()
 
     return {"status": "deleted"}

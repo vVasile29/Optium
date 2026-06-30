@@ -23,7 +23,7 @@ async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
     # Seed universal metrics if they don't exist
     from services.ontology import UNIVERSAL_DIMENSIONS
-    from models import Metric
+    from models import DecisionWeight, Metric
     from database import SessionLocal
 
     db = SessionLocal()
@@ -40,6 +40,51 @@ async def lifespan(app: FastAPI):
                     )
                     db.add(metric)
             db.commit()
+
+        # ── Data migration: ActivityWeight → DecisionWeight ──
+        from models import Activity, ActivityWeight
+
+        legacy_count = db.query(ActivityWeight).count()
+        if legacy_count > 0:
+            migrated = 0
+            seen_pairs: set[tuple[int, int]] = set()
+            # Query all ActivityWeight rows with their decision_id via join
+            all_legacy = (
+                db.query(ActivityWeight, Activity.decision_id)
+                .join(Activity, ActivityWeight.activity_id == Activity.id)
+                .order_by(ActivityWeight.id)
+                .all()
+            )
+            for lw, dec_id in all_legacy:
+                pair = (dec_id, lw.metric_id)
+                if pair in seen_pairs:
+                    continue
+                seen_pairs.add(pair)
+                # Check if DecisionWeight already exists for this pair
+                existing_dw = (
+                    db.query(DecisionWeight)
+                    .filter(
+                        DecisionWeight.decision_id == dec_id,
+                        DecisionWeight.metric_id == lw.metric_id,
+                    )
+                    .first()
+                )
+                if existing_dw:
+                    continue
+                dw = DecisionWeight(
+                    decision_id=dec_id,
+                    metric_id=lw.metric_id,
+                    weight=lw.weight,
+                )
+                db.add(dw)
+                migrated += 1
+            db.commit()
+            if migrated > 0:
+                import logging
+
+                logging.info(
+                    "Migrated %d legacy ActivityWeight rows to DecisionWeight", migrated
+                )
     finally:
         db.close()
     yield
@@ -110,22 +155,30 @@ def index(request: Request, db: Session = Depends(get_db)):
 
 @app.post("/decide")
 async def decide(request: Request, db: Session = Depends(get_db)):
-    from models import Activity, ActivityWeight, Decision, Metric
+    from models import Activity, Decision, DecisionWeight, Metric
     from services.ontology import UNIVERSAL_METRICS
 
     form = await request.form()
     query = form.get("q", "").strip()
 
-    # ── Helper: seed default weights for one activity ──
-    def _seed_default_weights(activity_id: int) -> None:
+    # ── Helper: seed default weights for a decision (decision-level) ──
+    def _seed_default_weights(decision_id: int) -> None:
+        # Idempotent: skip if DecisionWeight rows already exist
+        existing = (
+            db.query(DecisionWeight)
+            .filter(DecisionWeight.decision_id == decision_id)
+            .first()
+        )
+        if existing:
+            return
         all_metrics = db.query(Metric).all()
         metric_map = {m.name: m for m in all_metrics}
         for m in UNIVERSAL_METRICS:
             metric = metric_map.get(m["name"])
             if metric:
                 db.add(
-                    ActivityWeight(
-                        activity_id=activity_id,
+                    DecisionWeight(
+                        decision_id=decision_id,
                         metric_id=metric.id,
                         weight=m["default_weight"],
                     )
@@ -161,7 +214,7 @@ async def decide(request: Request, db: Session = Depends(get_db)):
             )
             db.add(activity)
             db.flush()
-            _seed_default_weights(activity.id)
+            _seed_default_weights(decision.id)
             db.commit()
             return RedirectResponse(
                 url=f"/evaluate/{decision.id}/review", status_code=303
@@ -186,7 +239,7 @@ async def decide(request: Request, db: Session = Depends(get_db)):
                 )
                 db.add(activity)
                 db.flush()
-                _seed_default_weights(activity.id)
+            _seed_default_weights(decision.id)
 
             db.commit()
             return RedirectResponse(url=f"/rank/{decision.id}/review", status_code=303)
@@ -205,7 +258,7 @@ async def decide(request: Request, db: Session = Depends(get_db)):
         )
         db.add(activity)
         db.flush()
-        _seed_default_weights(activity.id)
+    _seed_default_weights(decision.id)
 
     db.commit()
 

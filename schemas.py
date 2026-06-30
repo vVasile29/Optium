@@ -114,6 +114,24 @@ class ActivityWeightOut(BaseModel):
         from_attributes = True
 
 
+# ── DecisionWeight ──
+
+
+class DecisionWeightItem(BaseModel):
+    metric_id: int
+    weight: float = Field(ge=0.0, le=100.0)
+
+
+class DecisionWeightOut(BaseModel):
+    id: int
+    decision_id: int
+    metric_id: int
+    weight: float
+
+    class Config:
+        from_attributes = True
+
+
 # ── Alternative Score ──
 
 

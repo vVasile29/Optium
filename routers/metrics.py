@@ -7,7 +7,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from database import get_db
-from models import ActivityWeight, Metric
+from models import DecisionWeight, Metric
 from schemas import MetricCreate, MetricUpdate, SubMetricCreate
 
 router = APIRouter(tags=["metrics"])
@@ -111,8 +111,8 @@ def delete_metric(metric_id: int, db: Session = Depends(get_db)):
     if not metric:
         raise HTTPException(status_code=404, detail="Metric not found")
 
-    # Delete related activity weights
-    db.query(ActivityWeight).filter(ActivityWeight.metric_id == metric_id).delete()
+    # Delete related decision weights
+    db.query(DecisionWeight).filter(DecisionWeight.metric_id == metric_id).delete()
 
     # Delete sub-metrics first
     db.query(Metric).filter(Metric.parent_id == metric_id).delete()

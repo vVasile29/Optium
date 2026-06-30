@@ -7,7 +7,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from database import Base
-from models import Decision, Activity, ActivityWeight, Metric, AlternativeScore
+from models import Decision, Activity, DecisionWeight, Metric, AlternativeScore
 from services.scoring import (
     compute_alternative_fit_scores,
     filter_by_thresholds,
@@ -54,13 +54,11 @@ def test_basic_scoring(db):
     alt1 = make_activity(db, "Option A", decision.id)
     alt2 = make_activity(db, "Option B", decision.id)
 
-    # Weights: Cost=80, Quality=60
+    # Weights: Cost=80, Quality=60 (decision-level, shared across all activities)
     db.add_all(
         [
-            ActivityWeight(activity_id=alt1.id, metric_id=m1.id, weight=80),
-            ActivityWeight(activity_id=alt1.id, metric_id=m2.id, weight=60),
-            ActivityWeight(activity_id=alt2.id, metric_id=m1.id, weight=80),
-            ActivityWeight(activity_id=alt2.id, metric_id=m2.id, weight=60),
+            DecisionWeight(decision_id=decision.id, metric_id=m1.id, weight=80),
+            DecisionWeight(decision_id=decision.id, metric_id=m2.id, weight=60),
         ]
     )
     db.flush()
@@ -94,7 +92,7 @@ def test_lower_is_better_scoring(db):
     decision = make_decision(db)
     m = make_metric(db, "Cost", higher_is_better=False)
     alt = make_activity(db, "Cheap", decision.id)
-    db.add(ActivityWeight(activity_id=alt.id, metric_id=m.id, weight=100))
+    db.add(DecisionWeight(decision_id=decision.id, metric_id=m.id, weight=100))
     db.add(AlternativeScore(activity_id=alt.id, metric_id=m.id, score=30))
     db.commit()
     results = compute_alternative_fit_scores(decision.id, db)
@@ -115,12 +113,9 @@ def test_mixed_direction_scoring(db):
 
     db.add_all(
         [
-            ActivityWeight(activity_id=alt1.id, metric_id=m1.id, weight=80),
-            ActivityWeight(activity_id=alt1.id, metric_id=m2.id, weight=60),
-            ActivityWeight(activity_id=alt1.id, metric_id=m3.id, weight=50),
-            ActivityWeight(activity_id=alt2.id, metric_id=m1.id, weight=80),
-            ActivityWeight(activity_id=alt2.id, metric_id=m2.id, weight=60),
-            ActivityWeight(activity_id=alt2.id, metric_id=m3.id, weight=50),
+            DecisionWeight(decision_id=decision.id, metric_id=m1.id, weight=80),
+            DecisionWeight(decision_id=decision.id, metric_id=m2.id, weight=60),
+            DecisionWeight(decision_id=decision.id, metric_id=m3.id, weight=50),
         ]
     )
     db.flush()
@@ -161,10 +156,8 @@ def test_all_lower_is_better_scoring(db):
     alt2 = make_activity(db, "Bad", decision.id)
     db.add_all(
         [
-            ActivityWeight(activity_id=alt1.id, metric_id=m1.id, weight=100),
-            ActivityWeight(activity_id=alt1.id, metric_id=m2.id, weight=100),
-            ActivityWeight(activity_id=alt2.id, metric_id=m1.id, weight=100),
-            ActivityWeight(activity_id=alt2.id, metric_id=m2.id, weight=100),
+            DecisionWeight(decision_id=decision.id, metric_id=m1.id, weight=100),
+            DecisionWeight(decision_id=decision.id, metric_id=m2.id, weight=100),
             AlternativeScore(activity_id=alt1.id, metric_id=m1.id, score=20),
             AlternativeScore(activity_id=alt1.id, metric_id=m2.id, score=30),
             AlternativeScore(activity_id=alt2.id, metric_id=m1.id, score=80),
@@ -190,10 +183,8 @@ def test_boundary_scores(db):
     alt2 = make_activity(db, "Worst", decision.id)
     db.add_all(
         [
-            ActivityWeight(activity_id=alt1.id, metric_id=m1.id, weight=100),
-            ActivityWeight(activity_id=alt1.id, metric_id=m2.id, weight=100),
-            ActivityWeight(activity_id=alt2.id, metric_id=m1.id, weight=100),
-            ActivityWeight(activity_id=alt2.id, metric_id=m2.id, weight=100),
+            DecisionWeight(decision_id=decision.id, metric_id=m1.id, weight=100),
+            DecisionWeight(decision_id=decision.id, metric_id=m2.id, weight=100),
             # Best: Cost=0 (inverted to 100), Quality=100 → 20000/200/100 = 1.0
             AlternativeScore(activity_id=alt1.id, metric_id=m1.id, score=0),
             AlternativeScore(activity_id=alt1.id, metric_id=m2.id, score=100),
@@ -219,8 +210,8 @@ def test_dimension_scores_inversion(db):
     alt = make_activity(db, "Option", decision.id)
     db.add_all(
         [
-            ActivityWeight(activity_id=alt.id, metric_id=m1.id, weight=80),
-            ActivityWeight(activity_id=alt.id, metric_id=m2.id, weight=60),
+            DecisionWeight(decision_id=decision.id, metric_id=m1.id, weight=80),
+            DecisionWeight(decision_id=decision.id, metric_id=m2.id, weight=60),
             AlternativeScore(activity_id=alt.id, metric_id=m1.id, score=30),
             AlternativeScore(activity_id=alt.id, metric_id=m2.id, score=80),
         ]
@@ -244,8 +235,8 @@ def test_higher_is_better_map_missing_metric(db):
     m = make_metric(db, "Cost", higher_is_better=False)
     alt = make_activity(db, "Test", decision.id)
     fake_metric_id = 99999  # Does not exist in Metric table
-    db.add(ActivityWeight(activity_id=alt.id, metric_id=m.id, weight=80))
-    db.add(ActivityWeight(activity_id=alt.id, metric_id=fake_metric_id, weight=60))
+    db.add(DecisionWeight(decision_id=decision.id, metric_id=m.id, weight=80))
+    db.add(DecisionWeight(decision_id=decision.id, metric_id=fake_metric_id, weight=60))
     db.add(AlternativeScore(activity_id=alt.id, metric_id=m.id, score=30))
     db.add(AlternativeScore(activity_id=alt.id, metric_id=fake_metric_id, score=80))
     db.commit()
@@ -262,7 +253,7 @@ def test_perfect_score(db):
     decision = make_decision(db)
     m = make_metric(db, "Quality")
     alt = make_activity(db, "Perfect", decision.id)
-    db.add(ActivityWeight(activity_id=alt.id, metric_id=m.id, weight=100))
+    db.add(DecisionWeight(decision_id=decision.id, metric_id=m.id, weight=100))
     db.add(AlternativeScore(activity_id=alt.id, metric_id=m.id, score=100))
     db.commit()
     results = compute_alternative_fit_scores(decision.id, db)
@@ -274,7 +265,7 @@ def test_zero_scores(db):
     decision = make_decision(db)
     m = make_metric(db, "Quality")
     alt = make_activity(db, "Zero", decision.id)
-    db.add(ActivityWeight(activity_id=alt.id, metric_id=m.id, weight=100))
+    db.add(DecisionWeight(decision_id=decision.id, metric_id=m.id, weight=100))
     db.add(AlternativeScore(activity_id=alt.id, metric_id=m.id, score=0))
     db.commit()
     results = compute_alternative_fit_scores(decision.id, db)
@@ -292,7 +283,7 @@ def test_no_weights_skipped(db):
     decision = make_decision(db)
     m = make_metric(db, "Quality")
     alt = make_activity(db, "No Weights", decision.id)
-    # No ActivityWeight
+    # No DecisionWeight
     db.add(AlternativeScore(activity_id=alt.id, metric_id=m.id, score=80))
     db.commit()
     results = compute_alternative_fit_scores(decision.id, db)
@@ -306,8 +297,7 @@ def test_sorting_order(db):
     alt2 = make_activity(db, "High", decision.id)
     db.add_all(
         [
-            ActivityWeight(activity_id=alt1.id, metric_id=m.id, weight=100),
-            ActivityWeight(activity_id=alt2.id, metric_id=m.id, weight=100),
+            DecisionWeight(decision_id=decision.id, metric_id=m.id, weight=100),
             AlternativeScore(activity_id=alt1.id, metric_id=m.id, score=30),
             AlternativeScore(activity_id=alt2.id, metric_id=m.id, score=90),
         ]
@@ -327,7 +317,7 @@ class TestFilterByThresholds:
         decision = make_decision(db)
         m = make_metric(db, "Cost")
         alt = make_activity(db, "Cheap", decision.id)
-        db.add(ActivityWeight(activity_id=alt.id, metric_id=m.id, weight=100))
+        db.add(DecisionWeight(decision_id=decision.id, metric_id=m.id, weight=100))
         db.add(AlternativeScore(activity_id=alt.id, metric_id=m.id, score=30))
         decision.thresholds = json.dumps(
             [{"metric_id": m.id, "operator": "<=", "value": 60}]
@@ -346,8 +336,7 @@ class TestFilterByThresholds:
         alt2 = make_activity(db, "Expensive", decision.id)
         db.add_all(
             [
-                ActivityWeight(activity_id=alt1.id, metric_id=m.id, weight=100),
-                ActivityWeight(activity_id=alt2.id, metric_id=m.id, weight=100),
+                DecisionWeight(decision_id=decision.id, metric_id=m.id, weight=100),
                 AlternativeScore(activity_id=alt1.id, metric_id=m.id, score=30),
                 AlternativeScore(activity_id=alt2.id, metric_id=m.id, score=80),
             ]
@@ -368,7 +357,7 @@ class TestFilterByThresholds:
         decision = make_decision(db)
         m = make_metric(db, "Cost")
         alt = make_activity(db, "Expensive", decision.id)
-        db.add(ActivityWeight(activity_id=alt.id, metric_id=m.id, weight=100))
+        db.add(DecisionWeight(decision_id=decision.id, metric_id=m.id, weight=100))
         db.add(AlternativeScore(activity_id=alt.id, metric_id=m.id, score=80))
         decision.thresholds = json.dumps(
             [{"metric_id": m.id, "operator": "<=", "value": 60}]
@@ -385,7 +374,7 @@ class TestFilterByThresholds:
         decision = make_decision(db)
         m = make_metric(db, "Quality")
         alt = make_activity(db, "Good", decision.id)
-        db.add(ActivityWeight(activity_id=alt.id, metric_id=m.id, weight=100))
+        db.add(DecisionWeight(decision_id=decision.id, metric_id=m.id, weight=100))
         db.add(AlternativeScore(activity_id=alt.id, metric_id=m.id, score=85))
         db.commit()
 
@@ -403,8 +392,7 @@ class TestFilterByThresholds:
         alt_bad = make_activity(db, "HighCost", decision.id)
         db.add_all(
             [
-                ActivityWeight(activity_id=alt_good.id, metric_id=m.id, weight=100),
-                ActivityWeight(activity_id=alt_bad.id, metric_id=m.id, weight=100),
+                DecisionWeight(decision_id=decision.id, metric_id=m.id, weight=100),
                 AlternativeScore(activity_id=alt_good.id, metric_id=m.id, score=20),
                 AlternativeScore(activity_id=alt_bad.id, metric_id=m.id, score=50),
             ]

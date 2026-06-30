@@ -2,7 +2,7 @@ import random
 
 from sqlalchemy.orm import Session
 
-from models import Activity, ActivityWeight, AlternativeScore, Metric
+from models import Activity, DecisionWeight, AlternativeScore, Metric
 from services.decision_limits import robustness_workload_allowed
 
 
@@ -134,20 +134,17 @@ def build_decision_robustness(
         return None
 
     activity_ids_for_query = [activity.id for activity in activities]
-    weights_by_activity: dict[int, dict[int, float]] = {
-        activity.id: {} for activity in activities
+    # Load decision-level weights (shared across all activities)
+    decision_weights_raw = (
+        db.query(DecisionWeight).filter(DecisionWeight.decision_id == decision_id).all()
+    )
+    decision_weights: dict[int, float] = {
+        dw.metric_id: dw.weight for dw in decision_weights_raw
     }
     scores_by_activity: dict[int, dict[int, float]] = {
         activity.id: {} for activity in activities
     }
-    metric_ids_set: set[int] = set()
-    for weight in (
-        db.query(ActivityWeight)
-        .filter(ActivityWeight.activity_id.in_(activity_ids_for_query))
-        .all()
-    ):
-        weights_by_activity[weight.activity_id][weight.metric_id] = weight.weight
-        metric_ids_set.add(weight.metric_id)
+    metric_ids_set: set[int] = set(decision_weights.keys())
     for score in (
         db.query(AlternativeScore)
         .filter(AlternativeScore.activity_id.in_(activity_ids_for_query))
@@ -166,7 +163,7 @@ def build_decision_robustness(
     base_scores = {
         activity.id: _fit(
             metric_ids,
-            weights_by_activity.get(activity.id, {}),
+            decision_weights,
             scores_by_activity.get(activity.id, {}),
             higher_is_better,
         )
@@ -205,24 +202,24 @@ def build_decision_robustness(
     runner_up = base_order[1]
 
     for _ in range(simulations):
+        # Perturb decision-level weights ONCE (shared across all activities)
+        sampled_weights = {
+            metric_id: _clamp(
+                float(weight) * rng.uniform(WEIGHT_MIN_FACTOR, WEIGHT_MAX_FACTOR)
+            )
+            for metric_id, weight in decision_weights.items()
+        }
+        sampled_weights = _renormalize_weights(sampled_weights, decision_weights)
         simulated_scores = {}
         for activity in activities:
-            base_weights = weights_by_activity.get(activity.id, {})
-            sampled_weights = {
-                metric_id: _clamp(
-                    float(weight) * rng.uniform(WEIGHT_MIN_FACTOR, WEIGHT_MAX_FACTOR)
-                )
-                for metric_id, weight in base_weights.items()
-            }
-            sampled_weights = _renormalize_weights(sampled_weights, base_weights)
-            sampled_scores = {
+            sampled_scores_local = {
                 metric_id: _clamp(
                     float(score) + rng.uniform(SCORE_MIN_DELTA, SCORE_MAX_DELTA)
                 )
                 for metric_id, score in scores_by_activity.get(activity.id, {}).items()
             }
             simulated_scores[activity.id] = _fit(
-                metric_ids, sampled_weights, sampled_scores, higher_is_better
+                metric_ids, sampled_weights, sampled_scores_local, higher_is_better
             )
 
         top_score = max(simulated_scores.values())
@@ -319,7 +316,7 @@ def _robustness_payload(
         },
         "weight_renormalization": {
             "applied": True,
-            "scope": "per_alternative",
+            "scope": "decision",
             "target": "base_total_weight",
             "when": "after perturbation and clipping when base and sampled totals are positive",
             "zero_total_behavior": "no-op when base or sampled total is zero",

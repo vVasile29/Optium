@@ -31,8 +31,38 @@ class Decision(Base):
         "Activity", back_populates="decision", cascade="all, delete-orphan"
     )
 
+    weights = relationship(
+        "DecisionWeight", back_populates="decision", cascade="all, delete-orphan"
+    )
+
     def __repr__(self):
         return f"<Decision(id={self.id}, query={self.query!r})>"
+
+
+class DecisionWeight(Base):
+    __tablename__ = "decision_weights"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    decision_id = Column(
+        Integer,
+        ForeignKey("decisions.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    metric_id = Column(
+        Integer, ForeignKey("metrics.id", ondelete="CASCADE"), nullable=False
+    )
+    weight = Column(Float, nullable=False)  # 0.0–100.0
+
+    decision = relationship("Decision", back_populates="weights")
+    metric = relationship("Metric")
+
+    __table_args__ = (
+        UniqueConstraint("decision_id", "metric_id", name="uq_decision_metric_weight"),
+    )
+
+    def __repr__(self):
+        return f"<DecisionWeight(decision={self.decision_id}, metric={self.metric_id}, weight={self.weight})>"
 
 
 class Metric(Base):
@@ -63,10 +93,13 @@ class Activity(Base):
     description = Column(String, nullable=True)
     decision_id = Column(Integer, ForeignKey("decisions.id"), nullable=True, index=True)
 
+    decision = relationship("Decision", back_populates="activities")
+
+    # DEPRECATED: Only kept for backward compatibility so the ORM can resolve
+    # ActivityWeight.activity → Activity.weights. No active code path creates this.
     weights = relationship(
         "ActivityWeight", back_populates="activity", cascade="all, delete-orphan"
     )
-    decision = relationship("Decision", back_populates="activities")
 
     __table_args__ = (
         UniqueConstraint("name", "decision_id", name="uq_activity_name_decision"),
@@ -76,6 +109,9 @@ class Activity(Base):
         return f"<Activity(id={self.id}, name={self.name!r})>"
 
 
+# DEPRECATED: Legacy per-alternative weights. Use DecisionWeight instead.
+# Kept only for backward compatibility with existing database rows.
+# No active code path should create or query this model.
 class ActivityWeight(Base):
     __tablename__ = "activity_weights"
 

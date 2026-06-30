@@ -2,26 +2,19 @@ import json
 
 from sqlalchemy.orm import Session
 
-from models import Activity, ActivityWeight, AlternativeScore, Decision, Metric
+from models import Activity, DecisionWeight, AlternativeScore, Decision, Metric
 from services.robustness import build_decision_robustness
 from services.scoring import (
-    apply_ko_criteria,
     compute_alternative_fit_scores,
     filter_by_thresholds,
 )
 
 
 def _selected_metrics(decision_id: int, db: Session) -> list[Metric]:
-    activity_ids = [
-        a.id
-        for a in db.query(Activity).filter(Activity.decision_id == decision_id).all()
-    ]
-    if not activity_ids:
-        return []
     metric_ids = {
-        aw.metric_id
-        for aw in db.query(ActivityWeight)
-        .filter(ActivityWeight.activity_id.in_(activity_ids))
+        dw.metric_id
+        for dw in db.query(DecisionWeight)
+        .filter(DecisionWeight.decision_id == decision_id)
         .all()
     }
     if not metric_ids:
@@ -68,13 +61,10 @@ def get_decision_export_data(decision_id: int, db: Session) -> dict | None:
         }
 
     weights_by_metric = {}
-    if activities:
-        for weight in (
-            db.query(ActivityWeight)
-            .filter(ActivityWeight.activity_id == activities[0].id)
-            .all()
-        ):
-            weights_by_metric[weight.metric_id] = weight.weight
+    for dw in (
+        db.query(DecisionWeight).filter(DecisionWeight.decision_id == decision_id).all()
+    ):
+        weights_by_metric[dw.metric_id] = dw.weight
 
     rows = []
     for metric in metrics:
@@ -131,7 +121,6 @@ def get_decision_export_data(decision_id: int, db: Session) -> dict | None:
             activity_ids=[result["activity_id"] for result in result_basis],
         ),
         "significance": None,
-        "ko_result": apply_ko_criteria(decision_id, db),
         "rows": rows,
         "thresholds": thresholds,
         "filter_result": filter_result,
@@ -158,14 +147,6 @@ def generate_markdown_brief(data: dict) -> str:
             lines.append(f"{idx}. {result['activity_name']} — {result['fit_pct']}%")
     else:
         lines.append("No scored results yet.")
-
-    ko_result = data.get("ko_result") or {}
-    if ko_result.get("eliminated"):
-        lines.extend(["", "## Knock-out Criteria"])
-        for item in ko_result["eliminated"]:
-            lines.append(
-                f"- {item['activity_name']}: {'; '.join(item.get('ko_reasons', []))}"
-            )
 
     if data.get("thresholds"):
         lines.extend(["", "## Threshold Filters"])

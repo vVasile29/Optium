@@ -2,7 +2,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from database import Base
-from models import Activity, ActivityWeight, AlternativeScore, Decision, Metric
+from models import Activity, DecisionWeight, AlternativeScore, Decision, Metric
 from services.decision_limits import MAX_DECISION_ALTERNATIVES, MAX_DECISION_METRICS
 from services.robustness import (
     _renormalize_weights,
@@ -19,11 +19,14 @@ def _db():
     return sessionmaker(autocommit=False, autoflush=False, bind=engine)()
 
 
-def _decision_with_options(db, scores=(90, 70), weights=(100, 100)):
+def _decision_with_options(db, scores=(90, 70), weights=(100,)):
     decision = Decision(query="Pick one", category="General")
     metric = Metric(name="Quality", category="Quality", higher_is_better=True)
     db.add_all([decision, metric])
     db.flush()
+    # Create decision-level weight(s) — shared across all activities
+    for w in weights:
+        db.add(DecisionWeight(decision_id=decision.id, metric_id=metric.id, weight=w))
     activities = []
     for index, score in enumerate(scores):
         activity = Activity(
@@ -31,11 +34,6 @@ def _decision_with_options(db, scores=(90, 70), weights=(100, 100)):
         )
         db.add(activity)
         db.flush()
-        db.add(
-            ActivityWeight(
-                activity_id=activity.id, metric_id=metric.id, weight=weights[index]
-            )
-        )
         db.add(
             AlternativeScore(activity_id=activity.id, metric_id=metric.id, score=score)
         )
@@ -104,7 +102,7 @@ def test_no_alternatives_returns_none():
 def test_all_zero_weights_tie_first_rank_acceptability():
     db = _db()
     decision, _activities, _metric = _decision_with_options(
-        db, scores=(80, 20), weights=(0, 0)
+        db, scores=(80, 20), weights=(0,)
     )
     robustness = build_decision_robustness(decision.id, db, seed=2, simulations=100)
 
@@ -156,6 +154,9 @@ def test_robustness_workload_guard_returns_none():
         db.flush()
         metrics.append(metric)
 
+    # Create decision-level weights (one per metric)
+    for metric in metrics:
+        db.add(DecisionWeight(decision_id=decision.id, metric_id=metric.id, weight=50))
     for alt_index in range(MAX_DECISION_ALTERNATIVES + 1):
         activity = Activity(
             name=f"Option {alt_index}", category="General", decision_id=decision.id
@@ -163,9 +164,6 @@ def test_robustness_workload_guard_returns_none():
         db.add(activity)
         db.flush()
         for metric in metrics:
-            db.add(
-                ActivityWeight(activity_id=activity.id, metric_id=metric.id, weight=50)
-            )
             db.add(
                 AlternativeScore(activity_id=activity.id, metric_id=metric.id, score=50)
             )

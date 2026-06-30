@@ -6,7 +6,7 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy.orm import Session
 
 from database import get_db
-from models import Activity, ActivityWeight, AlternativeScore, Decision, Metric
+from models import Activity, DecisionWeight, AlternativeScore, Decision, Metric
 from services.decision_limits import enforce_decision_size
 from services.robustness import build_decision_robustness
 from services.scoring import (
@@ -150,11 +150,9 @@ async def refine_decision(
             },
         )
 
-    # Delete old activities and their weights/scores
+    # Delete old DecisionWeight rows, activities and their scores
+    db.query(DecisionWeight).filter(DecisionWeight.decision_id == decision_id).delete()
     for activity in decision.activities:
-        db.query(ActivityWeight).filter(
-            ActivityWeight.activity_id == activity.id
-        ).delete()
         db.query(AlternativeScore).filter(
             AlternativeScore.activity_id == activity.id
         ).delete()
@@ -171,14 +169,14 @@ async def refine_decision(
         db.add(activity)
         db.flush()
 
-        # Create weight rows for each selected metric
-        for mitem in metric_items:
-            aw = ActivityWeight(
-                activity_id=activity.id,
-                metric_id=mitem["metric_id"],
-                weight=mitem["default_weight"],
-            )
-            db.add(aw)
+    # Create ONE DecisionWeight per metric (decision-level)
+    for mitem in metric_items:
+        dw = DecisionWeight(
+            decision_id=decision_id,
+            metric_id=mitem["metric_id"],
+            weight=mitem["default_weight"],
+        )
+        db.add(dw)
 
     db.commit()
 
@@ -205,19 +203,14 @@ def review_decision(request: Request, decision_id: int, db: Session = Depends(ge
     all_metrics_db = db.query(Metric).order_by(Metric.category, Metric.name).all()
     metric_map = {m.name: m for m in all_metrics_db}
 
-    # Determine which metrics are already selected and their weights
+    # Determine which metrics are already selected and their weights (decision-level)
     selected_metric_ids = set()
     weights_by_metric_id = {}
-    if activities:
-        activity_ids = [a.id for a in activities]
-        for aw in (
-            db.query(ActivityWeight)
-            .filter(ActivityWeight.activity_id.in_(activity_ids))
-            .all()
-        ):
-            selected_metric_ids.add(aw.metric_id)
-            # Use the weight from the first activity (all share same weight by design)
-            weights_by_metric_id[aw.metric_id] = aw.weight
+    for dw in (
+        db.query(DecisionWeight).filter(DecisionWeight.decision_id == decision_id).all()
+    ):
+        selected_metric_ids.add(dw.metric_id)
+        weights_by_metric_id[dw.metric_id] = dw.weight
 
     criteria = []
     for c in UNIVERSAL_METRICS:
@@ -263,16 +256,12 @@ async def score_decision(
 
     activities = db.query(Activity).filter(Activity.decision_id == decision_id).all()
 
-    # Get metrics from ActivityWeight for this decision's activities
-    activity_ids = [a.id for a in activities]
+    # Get metrics from DecisionWeight for this decision
     metric_ids = set()
-    if activity_ids:
-        for aw in (
-            db.query(ActivityWeight)
-            .filter(ActivityWeight.activity_id.in_(activity_ids))
-            .all()
-        ):
-            metric_ids.add(aw.metric_id)
+    for dw in (
+        db.query(DecisionWeight).filter(DecisionWeight.decision_id == decision_id).all()
+    ):
+        metric_ids.add(dw.metric_id)
     metrics = (
         db.query(Metric).filter(Metric.id.in_(metric_ids)).all() if metric_ids else []
     )
@@ -315,16 +304,12 @@ async def decision_result(
 
     activities = db.query(Activity).filter(Activity.decision_id == decision_id).all()
 
-    # Get metrics from ActivityWeight for this decision's activities
-    activity_ids = [a.id for a in activities]
+    # Get metrics from DecisionWeight for this decision
     metric_ids = set()
-    if activity_ids:
-        for aw in (
-            db.query(ActivityWeight)
-            .filter(ActivityWeight.activity_id.in_(activity_ids))
-            .all()
-        ):
-            metric_ids.add(aw.metric_id)
+    for dw in (
+        db.query(DecisionWeight).filter(DecisionWeight.decision_id == decision_id).all()
+    ):
+        metric_ids.add(dw.metric_id)
     metrics = (
         db.query(Metric).filter(Metric.id.in_(metric_ids)).all() if metric_ids else []
     )
@@ -370,19 +355,18 @@ async def decision_result(
     # Build flat rows for the detailed scores table
     rows = []
     for m in metrics:
-        # Get weight for this metric from any activity's ActivityWeight
+        # Get weight for this metric from DecisionWeight (decision-level)
         weight = 50
-        if activities:
-            aw = (
-                db.query(ActivityWeight)
-                .filter(
-                    ActivityWeight.activity_id == activities[0].id,
-                    ActivityWeight.metric_id == m.id,
-                )
-                .first()
+        dw = (
+            db.query(DecisionWeight)
+            .filter(
+                DecisionWeight.decision_id == decision_id,
+                DecisionWeight.metric_id == m.id,
             )
-            if aw:
-                weight = aw.weight
+            .first()
+        )
+        if dw:
+            weight = dw.weight
 
         row = {
             "metric_name": m.name,
@@ -408,16 +392,12 @@ async def decision_result(
     threshold_errors = []
 
     # Build threshold_criteria for Alpine prepopulation
-    # Get all metrics that have ActivityWeight rows for this decision's activities
-    activity_ids = [a.id for a in activities]
+    # Get all metrics that have DecisionWeight rows for this decision
     metric_ids_with_weights = set()
-    if activity_ids:
-        for aw in (
-            db.query(ActivityWeight)
-            .filter(ActivityWeight.activity_id.in_(activity_ids))
-            .all()
-        ):
-            metric_ids_with_weights.add(aw.metric_id)
+    for dw in (
+        db.query(DecisionWeight).filter(DecisionWeight.decision_id == decision_id).all()
+    ):
+        metric_ids_with_weights.add(dw.metric_id)
 
     # Parse existing thresholds from decision JSON
     existing_thresholds = []
@@ -432,7 +412,7 @@ async def decision_result(
         if isinstance(t, dict) and "metric_id" in t:
             existing_by_metric[t["metric_id"]] = t
 
-    # Build threshold_criteria for all metrics with ActivityWeight rows
+    # Build threshold_criteria for all metrics with DecisionWeight rows
     if metric_ids_with_weights:
         metrics_in_use = (
             db.query(Metric).filter(Metric.id.in_(metric_ids_with_weights)).all()
@@ -488,16 +468,12 @@ async def score_page(request: Request, decision_id: int, db: Session = Depends(g
 
     activities = db.query(Activity).filter(Activity.decision_id == decision_id).all()
 
-    # Get metrics from ActivityWeight for this decision's activities
-    activity_ids = [a.id for a in activities]
+    # Get metrics from DecisionWeight for this decision
     metric_ids = set()
-    if activity_ids:
-        for aw in (
-            db.query(ActivityWeight)
-            .filter(ActivityWeight.activity_id.in_(activity_ids))
-            .all()
-        ):
-            metric_ids.add(aw.metric_id)
+    for dw in (
+        db.query(DecisionWeight).filter(DecisionWeight.decision_id == decision_id).all()
+    ):
+        metric_ids.add(dw.metric_id)
     metrics = (
         db.query(Metric).filter(Metric.id.in_(metric_ids)).order_by(Metric.id).all()
         if metric_ids
@@ -508,17 +484,16 @@ async def score_page(request: Request, decision_id: int, db: Session = Depends(g
     criteria = []
     for m in metrics:
         weight = 50
-        if activities:
-            aw = (
-                db.query(ActivityWeight)
-                .filter(
-                    ActivityWeight.activity_id == activities[0].id,
-                    ActivityWeight.metric_id == m.id,
-                )
-                .first()
+        dw = (
+            db.query(DecisionWeight)
+            .filter(
+                DecisionWeight.decision_id == decision_id,
+                DecisionWeight.metric_id == m.id,
             )
-            if aw:
-                weight = aw.weight
+            .first()
+        )
+        if dw:
+            weight = dw.weight
         criteria.append(
             {
                 "id": m.id,
@@ -563,14 +538,14 @@ async def delete_decision(
         raise HTTPException(status_code=404, detail="Decision not found")
 
     # AlternativeScore is not in the ORM cascade chain (no relationship from Activity),
-    # so delete it manually. The rest (Activity → ActivityWeight) cascades via ORM.
+    # so delete it manually. The rest (Decision → DecisionWeight) cascades via ORM.
     activity_ids = [a.id for a in decision.activities]
     if activity_ids:
         db.query(AlternativeScore).filter(
             AlternativeScore.activity_id.in_(activity_ids)
         ).delete()
 
-    db.delete(decision)  # cascades to Activity → ActivityWeight
+    db.delete(decision)  # cascades to DecisionWeight via ORM
     db.commit()
 
     redirect = safe_delete_redirect(request.query_params.get("redirect"))
@@ -593,17 +568,12 @@ async def apply_thresholds(
 
     form = await request.form()
 
-    # Collect metric IDs with ActivityWeight rows
-    activities = db.query(Activity).filter(Activity.decision_id == decision_id).all()
-    activity_ids = [a.id for a in activities]
+    # Collect metric IDs with DecisionWeight rows
     metric_ids_with_weights = set()
-    if activity_ids:
-        for aw in (
-            db.query(ActivityWeight)
-            .filter(ActivityWeight.activity_id.in_(activity_ids))
-            .all()
-        ):
-            metric_ids_with_weights.add(aw.metric_id)
+    for dw in (
+        db.query(DecisionWeight).filter(DecisionWeight.decision_id == decision_id).all()
+    ):
+        metric_ids_with_weights.add(dw.metric_id)
 
     thresholds_json = []
     threshold_errors = []
@@ -689,15 +659,11 @@ async def _render_result_with_threshold_errors(
         raise HTTPException(status_code=404, detail="Decision not found")
 
     activities = db.query(Activity).filter(Activity.decision_id == decision_id).all()
-    activity_ids = [a.id for a in activities]
     metric_ids = set()
-    if activity_ids:
-        for aw in (
-            db.query(ActivityWeight)
-            .filter(ActivityWeight.activity_id.in_(activity_ids))
-            .all()
-        ):
-            metric_ids.add(aw.metric_id)
+    for dw in (
+        db.query(DecisionWeight).filter(DecisionWeight.decision_id == decision_id).all()
+    ):
+        metric_ids.add(dw.metric_id)
     metrics = (
         db.query(Metric).filter(Metric.id.in_(metric_ids)).all() if metric_ids else []
     )
@@ -726,17 +692,16 @@ async def _render_result_with_threshold_errors(
     rows = []
     for m in metrics:
         weight = 50
-        if activities:
-            aw = (
-                db.query(ActivityWeight)
-                .filter(
-                    ActivityWeight.activity_id == activities[0].id,
-                    ActivityWeight.metric_id == m.id,
-                )
-                .first()
+        dw = (
+            db.query(DecisionWeight)
+            .filter(
+                DecisionWeight.decision_id == decision_id,
+                DecisionWeight.metric_id == m.id,
             )
-            if aw:
-                weight = aw.weight
+            .first()
+        )
+        if dw:
+            weight = dw.weight
         row = {
             "metric_name": m.name,
             "metric_desc": m.description or "",
@@ -773,13 +738,10 @@ async def _render_result_with_threshold_errors(
 
     threshold_criteria = []
     metric_ids_with_weights = set()
-    if activity_ids:
-        for aw in (
-            db.query(ActivityWeight)
-            .filter(ActivityWeight.activity_id.in_(activity_ids))
-            .all()
-        ):
-            metric_ids_with_weights.add(aw.metric_id)
+    for dw in (
+        db.query(DecisionWeight).filter(DecisionWeight.decision_id == decision_id).all()
+    ):
+        metric_ids_with_weights.add(dw.metric_id)
 
     existing_thresholds = []
     if decision.thresholds:

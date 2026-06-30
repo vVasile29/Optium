@@ -2,7 +2,7 @@ import json
 import logging
 from sqlalchemy.orm import Session
 
-from models import ActivityWeight
+from models import DecisionWeight
 
 
 # ── Threshold-based elimination (Elimination by Aspects) ──
@@ -149,101 +149,12 @@ def filter_by_thresholds(decision_id: int, db: Session) -> dict:
     }
 
 
-def apply_ko_criteria(decision_id: int, db: Session) -> dict:
-    from models import Activity, AlternativeScore, Decision, Metric
-
-    decision = db.query(Decision).filter(Decision.id == decision_id).first()
-    activities = db.query(Activity).filter(Activity.decision_id == decision_id).all()
-    if not decision or not hasattr(decision, "ko_criteria"):
-        return {
-            "eliminated": [],
-            "survivor_ids": [a.id for a in activities],
-            "all_eliminated": False,
-        }
-
-    criteria_raw = getattr(decision, "ko_criteria", None)
-    if not criteria_raw:
-        return {
-            "eliminated": [],
-            "survivor_ids": [a.id for a in activities],
-            "all_eliminated": False,
-        }
-
-    try:
-        criteria = json.loads(criteria_raw)
-    except (json.JSONDecodeError, TypeError):
-        criteria = []
-
-    if not criteria:
-        return {
-            "eliminated": [],
-            "survivor_ids": [a.id for a in activities],
-            "all_eliminated": False,
-        }
-
-    metrics = {m.id: m for m in db.query(Metric).all()}
-    eliminated = []
-    survivor_ids = []
-
-    for activity in activities:
-        scores = {
-            s.metric_id: s.score
-            for s in db.query(AlternativeScore)
-            .filter(AlternativeScore.activity_id == activity.id)
-            .all()
-        }
-        reasons = []
-        for criterion in criteria:
-            metric_id = criterion.get("metric_id")
-            operator = criterion.get("operator", ">=")
-            value = float(criterion.get("value", 0))
-            metric_name = (
-                metrics.get(metric_id).name
-                if metric_id in metrics
-                else "Unknown metric"
-            )
-            score = scores.get(metric_id)
-            failed = score is None
-            if score is not None:
-                failed = (
-                    (operator == ">=" and score < value)
-                    or (operator == ">" and score <= value)
-                    or (operator == "<=" and score > value)
-                    or (operator == "<" and score >= value)
-                )
-            if failed:
-                if score is None:
-                    reasons.append(
-                        f"No score available for {metric_name} (KO {operator} {value})"
-                    )
-                else:
-                    reasons.append(
-                        f"{metric_name} ({score}) fails KO {operator} {value}"
-                    )
-        if reasons:
-            eliminated.append(
-                {
-                    "activity_id": activity.id,
-                    "activity_name": activity.name,
-                    "ko_reasons": reasons,
-                }
-            )
-        else:
-            survivor_ids.append(activity.id)
-
-    return {
-        "eliminated": eliminated,
-        "survivor_ids": survivor_ids,
-        "all_eliminated": bool(activities) and not survivor_ids,
-    }
-
-
 def compute_alternative_fit_scores(decision_id: int, db: Session) -> list[dict]:
     """Compute fit scores for alternative scoring (decision engine flow).
 
     Each alternative is an Activity. Each criterion is a Metric.
     Scores come from AlternativeScore table.
-    Weights come from ActivityWeight table.
+    Weights come from DecisionWeight table (decision-level, shared across all activities).
 
     Returns sorted list of {activity_id, activity_name, fit_score, weighted_score}.
     """
@@ -253,25 +164,21 @@ def compute_alternative_fit_scores(decision_id: int, db: Session) -> list[dict]:
     if not activities:
         return []
 
+    # Load decision-level weights (shared across all activities)
+    decision_weights = (
+        db.query(DecisionWeight).filter(DecisionWeight.decision_id == decision_id).all()
+    )
+    weights: dict[int, float] = {dw.metric_id: dw.weight for dw in decision_weights}
+    if not weights:
+        return []
+
+    # Build higher_is_better map for metrics in the weights
+    metric_ids = list(weights.keys())
+    metrics = db.query(Metric).filter(Metric.id.in_(metric_ids)).all()
+    higher_is_better_map = {m.id: m.higher_is_better for m in metrics}
+
     results = []
     for activity in activities:
-        # Get weights for this activity
-        weights: dict[int, float] = {}
-        for aw in (
-            db.query(ActivityWeight)
-            .filter(ActivityWeight.activity_id == activity.id)
-            .all()
-        ):
-            weights[aw.metric_id] = aw.weight
-
-        if not weights:
-            continue
-
-        # Build higher_is_better map for metrics in this activity's weights
-        metric_ids = list(weights.keys())
-        metrics = db.query(Metric).filter(Metric.id.in_(metric_ids)).all()
-        higher_is_better_map = {m.id: m.higher_is_better for m in metrics}
-
         # Get scores for this activity
         scores: dict[int, float] = {}
         for ascore in (
@@ -332,14 +239,11 @@ def compute_dimension_scores(decision_id: int, db: Session) -> list[dict]:
     if not activities:
         return []
 
-    # Get weights for the first activity (all share same weights)
-    weights: dict[int, float] = {}
-    for aw in (
-        db.query(ActivityWeight)
-        .filter(ActivityWeight.activity_id == activities[0].id)
-        .all()
-    ):
-        weights[aw.metric_id] = aw.weight
+    # Get decision-level weights
+    decision_weights = (
+        db.query(DecisionWeight).filter(DecisionWeight.decision_id == decision_id).all()
+    )
+    weights: dict[int, float] = {dw.metric_id: dw.weight for dw in decision_weights}
 
     if not weights:
         return []

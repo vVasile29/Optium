@@ -7,7 +7,7 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy.orm import Session
 
 from database import get_db
-from models import Activity, ActivityWeight, AlternativeScore, Decision, Metric
+from models import Activity, DecisionWeight, AlternativeScore, Decision, Metric
 from services.decision_limits import enforce_decision_size
 from services.parser import extract_list
 from services.robustness import build_decision_robustness
@@ -97,18 +97,18 @@ async def rank_create(request: Request, db: Session = Depends(get_db)):
         db.add(activity)
         db.flush()
 
-        # Add default weight for all universal metrics
-        all_metrics = db.query(Metric).all()
-        metric_map = {m.name: m for m in all_metrics}
-        for m in UNIVERSAL_METRICS:
-            metric = metric_map.get(m["name"])
-            if metric:
-                aw = ActivityWeight(
-                    activity_id=activity.id,
-                    metric_id=metric.id,
-                    weight=m["default_weight"],
-                )
-                db.add(aw)
+    # Add default weight for all universal metrics (decision-level)
+    all_metrics = db.query(Metric).all()
+    metric_map = {m.name: m for m in all_metrics}
+    for m in UNIVERSAL_METRICS:
+        metric = metric_map.get(m["name"])
+        if metric:
+            dw = DecisionWeight(
+                decision_id=decision.id,
+                metric_id=metric.id,
+                weight=m["default_weight"],
+            )
+            db.add(dw)
 
     db.commit()
 
@@ -136,18 +136,14 @@ def rank_review(request: Request, decision_id: int, db: Session = Depends(get_db
     all_metrics_db = db.query(Metric).order_by(Metric.category, Metric.name).all()
     metric_map = {m.name: m for m in all_metrics_db}
 
-    # Determine which metrics are already selected and their weights
+    # Determine which metrics are already selected and their weights (decision-level)
     selected_metric_ids = set()
     weights_by_metric_id = {}
-    if activities:
-        activity_ids = [a.id for a in activities]
-        for aw in (
-            db.query(ActivityWeight)
-            .filter(ActivityWeight.activity_id.in_(activity_ids))
-            .all()
-        ):
-            selected_metric_ids.add(aw.metric_id)
-            weights_by_metric_id[aw.metric_id] = aw.weight
+    for dw in (
+        db.query(DecisionWeight).filter(DecisionWeight.decision_id == decision_id).all()
+    ):
+        selected_metric_ids.add(dw.metric_id)
+        weights_by_metric_id[dw.metric_id] = dw.weight
 
     criteria = []
     for c in UNIVERSAL_METRICS:
@@ -275,11 +271,9 @@ async def rank_refine(
             },
         )
 
-    # Delete old activities and their weights/scores
+    # Delete old DecisionWeight rows, activities and their scores
+    db.query(DecisionWeight).filter(DecisionWeight.decision_id == decision_id).delete()
     for activity in decision.activities:
-        db.query(ActivityWeight).filter(
-            ActivityWeight.activity_id == activity.id
-        ).delete()
         db.query(AlternativeScore).filter(
             AlternativeScore.activity_id == activity.id
         ).delete()
@@ -296,13 +290,14 @@ async def rank_refine(
         db.add(activity)
         db.flush()
 
-        for mitem in metric_items:
-            aw = ActivityWeight(
-                activity_id=activity.id,
-                metric_id=mitem["metric_id"],
-                weight=mitem["default_weight"],
-            )
-            db.add(aw)
+    # Create ONE DecisionWeight per metric (decision-level)
+    for mitem in metric_items:
+        dw = DecisionWeight(
+            decision_id=decision_id,
+            metric_id=mitem["metric_id"],
+            weight=mitem["default_weight"],
+        )
+        db.add(dw)
 
     db.commit()
 
@@ -318,16 +313,12 @@ def rank_score_page(request: Request, decision_id: int, db: Session = Depends(ge
 
     activities = db.query(Activity).filter(Activity.decision_id == decision_id).all()
 
-    # Get metrics from ActivityWeight
-    activity_ids = [a.id for a in activities]
+    # Get metrics from DecisionWeight
     metric_ids = set()
-    if activity_ids:
-        for aw in (
-            db.query(ActivityWeight)
-            .filter(ActivityWeight.activity_id.in_(activity_ids))
-            .all()
-        ):
-            metric_ids.add(aw.metric_id)
+    for dw in (
+        db.query(DecisionWeight).filter(DecisionWeight.decision_id == decision_id).all()
+    ):
+        metric_ids.add(dw.metric_id)
     metrics = (
         db.query(Metric).filter(Metric.id.in_(metric_ids)).order_by(Metric.id).all()
         if metric_ids
@@ -338,17 +329,16 @@ def rank_score_page(request: Request, decision_id: int, db: Session = Depends(ge
     criteria = []
     for m in metrics:
         weight = 50
-        if activities:
-            aw = (
-                db.query(ActivityWeight)
-                .filter(
-                    ActivityWeight.activity_id == activities[0].id,
-                    ActivityWeight.metric_id == m.id,
-                )
-                .first()
+        dw = (
+            db.query(DecisionWeight)
+            .filter(
+                DecisionWeight.decision_id == decision_id,
+                DecisionWeight.metric_id == m.id,
             )
-            if aw:
-                weight = aw.weight
+            .first()
+        )
+        if dw:
+            weight = dw.weight
         criteria.append(
             {
                 "id": m.id,
@@ -397,16 +387,12 @@ async def rank_score(request: Request, decision_id: int, db: Session = Depends(g
 
     activities = db.query(Activity).filter(Activity.decision_id == decision_id).all()
 
-    # Get metrics from ActivityWeight
-    activity_ids = [a.id for a in activities]
+    # Get metrics from DecisionWeight
     metric_ids = set()
-    if activity_ids:
-        for aw in (
-            db.query(ActivityWeight)
-            .filter(ActivityWeight.activity_id.in_(activity_ids))
-            .all()
-        ):
-            metric_ids.add(aw.metric_id)
+    for dw in (
+        db.query(DecisionWeight).filter(DecisionWeight.decision_id == decision_id).all()
+    ):
+        metric_ids.add(dw.metric_id)
     metrics = (
         db.query(Metric).filter(Metric.id.in_(metric_ids)).all() if metric_ids else []
     )
@@ -449,16 +435,12 @@ async def rank_result(
 
     activities = db.query(Activity).filter(Activity.decision_id == decision_id).all()
 
-    # Get metrics from ActivityWeight
-    activity_ids = [a.id for a in activities]
+    # Get metrics from DecisionWeight
     metric_ids = set()
-    if activity_ids:
-        for aw in (
-            db.query(ActivityWeight)
-            .filter(ActivityWeight.activity_id.in_(activity_ids))
-            .all()
-        ):
-            metric_ids.add(aw.metric_id)
+    for dw in (
+        db.query(DecisionWeight).filter(DecisionWeight.decision_id == decision_id).all()
+    ):
+        metric_ids.add(dw.metric_id)
     metrics = (
         db.query(Metric).filter(Metric.id.in_(metric_ids)).all() if metric_ids else []
     )
@@ -509,17 +491,16 @@ async def rank_result(
     rows = []
     for m in metrics:
         weight = 50
-        if activities:
-            aw = (
-                db.query(ActivityWeight)
-                .filter(
-                    ActivityWeight.activity_id == activities[0].id,
-                    ActivityWeight.metric_id == m.id,
-                )
-                .first()
+        dw = (
+            db.query(DecisionWeight)
+            .filter(
+                DecisionWeight.decision_id == decision_id,
+                DecisionWeight.metric_id == m.id,
             )
-            if aw:
-                weight = aw.weight
+            .first()
+        )
+        if dw:
+            weight = dw.weight
 
         row = {
             "metric_name": m.name,

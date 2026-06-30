@@ -5,7 +5,7 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy.orm import Session
 
 from database import get_db
-from models import Activity, ActivityWeight, AlternativeScore, Decision, Metric
+from models import Activity, DecisionWeight, AlternativeScore, Decision, Metric
 from services.decision_limits import enforce_decision_size
 from services.parser import extract_subject
 from services.robustness import build_decision_robustness
@@ -89,19 +89,19 @@ async def evaluate(request: Request, db: Session = Depends(get_db)):
     db.add(activity)
     db.flush()
 
-    # Create ActivityWeight records for all universal metrics (default weights)
+    # Create DecisionWeight records for all universal metrics (decision-level)
     all_metrics = db.query(Metric).all()
     metric_map = {m.name: m for m in all_metrics}
 
     for m in UNIVERSAL_METRICS:
         metric = metric_map.get(m["name"])
         if metric:
-            aw = ActivityWeight(
-                activity_id=activity.id,
+            dw = DecisionWeight(
+                decision_id=decision.id,
                 metric_id=metric.id,
                 weight=m["default_weight"],
             )
-            db.add(aw)
+            db.add(dw)
 
     db.commit()
 
@@ -125,17 +125,14 @@ def evaluate_review(request: Request, decision_id: int, db: Session = Depends(ge
     all_metrics_db = db.query(Metric).order_by(Metric.category, Metric.name).all()
     metric_map = {m.name: m for m in all_metrics_db}
 
-    # Determine which metrics are already selected and their weights
+    # Determine which metrics are already selected and their weights (decision-level)
     selected_metric_ids = set()
     weights_by_metric_id = {}
-    if activities:
-        for aw in (
-            db.query(ActivityWeight)
-            .filter(ActivityWeight.activity_id == activities[0].id)
-            .all()
-        ):
-            selected_metric_ids.add(aw.metric_id)
-            weights_by_metric_id[aw.metric_id] = aw.weight
+    for dw in (
+        db.query(DecisionWeight).filter(DecisionWeight.decision_id == decision_id).all()
+    ):
+        selected_metric_ids.add(dw.metric_id)
+        weights_by_metric_id[dw.metric_id] = dw.weight
 
     criteria = []
     for c in UNIVERSAL_METRICS:
@@ -235,11 +232,9 @@ async def evaluate_refine(
             },
         )
 
-    # Delete old activities and their weights/scores
+    # Delete old DecisionWeight rows, activities and their scores
+    db.query(DecisionWeight).filter(DecisionWeight.decision_id == decision_id).delete()
     for activity in decision.activities:
-        db.query(ActivityWeight).filter(
-            ActivityWeight.activity_id == activity.id
-        ).delete()
         db.query(AlternativeScore).filter(
             AlternativeScore.activity_id == activity.id
         ).delete()
@@ -255,14 +250,14 @@ async def evaluate_refine(
     db.add(activity)
     db.flush()
 
-    # Create weight rows for each selected metric
+    # Create ONE DecisionWeight per metric (decision-level)
     for mitem in metric_items:
-        aw = ActivityWeight(
-            activity_id=activity.id,
+        dw = DecisionWeight(
+            decision_id=decision_id,
             metric_id=mitem["metric_id"],
             weight=mitem["default_weight"],
         )
-        db.add(aw)
+        db.add(dw)
 
     db.commit()
 
@@ -280,16 +275,12 @@ def evaluate_score_page(
 
     activities = db.query(Activity).filter(Activity.decision_id == decision_id).all()
 
-    # Get metrics from ActivityWeight
-    activity_ids = [a.id for a in activities]
+    # Get metrics from DecisionWeight
     metric_ids = set()
-    if activity_ids:
-        for aw in (
-            db.query(ActivityWeight)
-            .filter(ActivityWeight.activity_id.in_(activity_ids))
-            .all()
-        ):
-            metric_ids.add(aw.metric_id)
+    for dw in (
+        db.query(DecisionWeight).filter(DecisionWeight.decision_id == decision_id).all()
+    ):
+        metric_ids.add(dw.metric_id)
     metrics = (
         db.query(Metric).filter(Metric.id.in_(metric_ids)).order_by(Metric.id).all()
         if metric_ids
@@ -300,17 +291,16 @@ def evaluate_score_page(
     criteria = []
     for m in metrics:
         weight = 50
-        if activities:
-            aw = (
-                db.query(ActivityWeight)
-                .filter(
-                    ActivityWeight.activity_id == activities[0].id,
-                    ActivityWeight.metric_id == m.id,
-                )
-                .first()
+        dw = (
+            db.query(DecisionWeight)
+            .filter(
+                DecisionWeight.decision_id == decision_id,
+                DecisionWeight.metric_id == m.id,
             )
-            if aw:
-                weight = aw.weight
+            .first()
+        )
+        if dw:
+            weight = dw.weight
         criteria.append(
             {
                 "id": m.id,
@@ -361,16 +351,12 @@ async def evaluate_score(
 
     activities = db.query(Activity).filter(Activity.decision_id == decision_id).all()
 
-    # Get metrics from ActivityWeight
-    activity_ids = [a.id for a in activities]
+    # Get metrics from DecisionWeight
     metric_ids = set()
-    if activity_ids:
-        for aw in (
-            db.query(ActivityWeight)
-            .filter(ActivityWeight.activity_id.in_(activity_ids))
-            .all()
-        ):
-            metric_ids.add(aw.metric_id)
+    for dw in (
+        db.query(DecisionWeight).filter(DecisionWeight.decision_id == decision_id).all()
+    ):
+        metric_ids.add(dw.metric_id)
     metrics = (
         db.query(Metric).filter(Metric.id.in_(metric_ids)).all() if metric_ids else []
     )
@@ -413,16 +399,12 @@ async def evaluate_result(
 
     activities = db.query(Activity).filter(Activity.decision_id == decision_id).all()
 
-    # Get metrics from ActivityWeight
-    activity_ids = [a.id for a in activities]
+    # Get metrics from DecisionWeight
     metric_ids = set()
-    if activity_ids:
-        for aw in (
-            db.query(ActivityWeight)
-            .filter(ActivityWeight.activity_id.in_(activity_ids))
-            .all()
-        ):
-            metric_ids.add(aw.metric_id)
+    for dw in (
+        db.query(DecisionWeight).filter(DecisionWeight.decision_id == decision_id).all()
+    ):
+        metric_ids.add(dw.metric_id)
     metrics = (
         db.query(Metric).filter(Metric.id.in_(metric_ids)).all() if metric_ids else []
     )
@@ -480,17 +462,16 @@ async def evaluate_result(
     rows = []
     for m in metrics:
         weight = 50
-        if activities:
-            aw = (
-                db.query(ActivityWeight)
-                .filter(
-                    ActivityWeight.activity_id == activities[0].id,
-                    ActivityWeight.metric_id == m.id,
-                )
-                .first()
+        dw = (
+            db.query(DecisionWeight)
+            .filter(
+                DecisionWeight.decision_id == decision_id,
+                DecisionWeight.metric_id == m.id,
             )
-            if aw:
-                weight = aw.weight
+            .first()
+        )
+        if dw:
+            weight = dw.weight
 
         row = {
             "metric_name": m.name,
@@ -548,7 +529,7 @@ async def delete_evaluation(
             AlternativeScore.activity_id.in_(activity_ids)
         ).delete()
 
-    db.delete(decision)  # cascades to Activity → ActivityWeight
+    db.delete(decision)  # cascades to DecisionWeight via ORM
     db.commit()
 
     redirect = request.query_params.get("redirect", "/")

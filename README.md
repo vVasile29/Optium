@@ -10,7 +10,7 @@ Type a question like "should I buy a house or an apartment?", "rank Python, Java
 - **Automatic flow detection** — one option becomes a diagnosis, two options become a comparison, and three or more become a ranking
 - **Universal criteria framework** — 6 value dimensions (Financial, Quality, Time, Risk, Experience, Convenience) with 12 curated metrics
 - **Interactive review** — see what the system parsed, add/remove alternatives, select criteria, adjust weights
-- **Weighted scoring** — per-(alternative, criterion) weights with 0–100 sliders
+- **Weighted scoring** — decision-level criterion weights with 0–100 sliders
 - **Decision robustness** — Monte Carlo MCDA sensitivity analysis reports winner retention and rank acceptability (Rank 1)
 - **Post-hoc threshold filtering** — apply must-have thresholds on the result page to see pass/fail alternatives and ranked survivors
 - **Radar chart** — visualize how alternatives compare across all criteria
@@ -119,9 +119,9 @@ Decision mode routing is automatic:
 
 ## Scoring and Robustness
 
-Optium uses a weighted additive MCDA model. Each alternative keeps its own criterion weights: `fit = Σ(score × weight) / Σ(weight) / 100`, with lower-is-better metrics inverted before aggregation.
+Optium uses a weighted additive MCDA model with decision-level criterion weights (shared across all alternatives): `fit = Σ(score × weight) / Σ(weight) / 100`, with lower-is-better metrics inverted before aggregation.
 
-Result pages also compute server-side robustness with a local Monte Carlo sampler. This is Monte Carlo sensitivity analysis on a weighted additive value model (WAVM), not hypothesis testing. Each simulation perturbs existing per-alternative weights uniformly by ±10%, clips weights to [0,100], renormalizes sampled weights back to that alternative's base total when base and sampled totals are positive, perturbs scores uniformly by ±5 points, clips scores to [0,100], and recomputes rankings. Reports use percentage-point units for the mean weighted score advantage and the 95% simulation interval, plus winner retained percent/count, winner-changed percentage, and rank acceptability (Rank 1).
+Result pages also compute server-side robustness with a local Monte Carlo sampler. This is Monte Carlo sensitivity analysis on a weighted additive value model (WAVM), not hypothesis testing. Each simulation perturbs the shared decision-level weight vector uniformly by ±10%, clips weights to [0,100], renormalizes sampled weights back to the decision's base total when base and sampled totals are positive, perturbs scores uniformly by ±5 points, clips scores to [0,100], and recomputes rankings. Reports use percentage-point units for the mean weighted score advantage and the 95% simulation interval, plus winner retained percent/count, winner-changed percentage, and rank acceptability (Rank 1).
 
 ## Project Structure
 

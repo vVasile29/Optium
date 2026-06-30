@@ -1312,7 +1312,7 @@ def test_decision_threshold_criteria_prepopulation(client, db):
 def test_decision_result_robustness_uses_saved_threshold_survivors(client, db):
     decision = _seed_scored_decision(db, "choose")
 
-    from models import Activity, ActivityWeight, AlternativeScore, Decision
+    from models import Activity, AlternativeScore, Decision
 
     winner = decision.activities[0]
     winner_scores = (
@@ -1325,12 +1325,8 @@ def test_decision_result_robustness_uses_saved_threshold_survivors(client, db):
     third = Activity(name="Filtered", category="General", decision_id=decision.id)
     db.add(third)
     db.flush()
-    for weight in winner.weights:
-        db.add(
-            ActivityWeight(
-                activity_id=third.id, metric_id=weight.metric_id, weight=weight.weight
-            )
-        )
+    # No need to create DecisionWeight for third — weights are decision-level
+    # and already exist from _seed_scored_decision
     for score in winner_scores:
         mid = score.metric_id
         db.add(AlternativeScore(activity_id=third.id, metric_id=mid, score=95))
@@ -1415,7 +1411,7 @@ def test_decision_invalid_threshold_form_uses_saved_threshold_survivors(client, 
 
 
 def _seed_scored_decision(db, mode="choose"):
-    from models import Activity, ActivityWeight, AlternativeScore, Decision, Metric
+    from models import Activity, AlternativeScore, Decision, DecisionWeight, Metric
 
     decision = Decision(query=f"Export {mode} decision", category="General", mode=mode)
     db.add(decision)
@@ -1433,11 +1429,9 @@ def _seed_scored_decision(db, mode="choose"):
 
     metrics = db.query(Metric).order_by(Metric.id).limit(3).all()
     assert len(metrics) >= 2
-    for activity in activities:
-        for metric in metrics:
-            db.add(
-                ActivityWeight(activity_id=activity.id, metric_id=metric.id, weight=70)
-            )
+    # Decision-level weights (shared across all activities)
+    for metric in metrics:
+        db.add(DecisionWeight(decision_id=decision.id, metric_id=metric.id, weight=70))
 
     if mode == "diagnose":
         for metric in metrics:
@@ -1540,8 +1534,8 @@ def test_slider_fill_markup_and_sensitivity_classes(client, db):
 
 
 def test_api_decision_rows_expose_sensitivity_scoring_fields(client, db):
-    """Decision detail rows include metric direction and per-activity weights."""
-    from models import Activity, ActivityWeight, AlternativeScore, Decision, Metric
+    """Decision detail rows include metric direction and decision-level weights."""
+    from models import Activity, AlternativeScore, Decision, DecisionWeight, Metric
 
     metric = db.query(Metric).filter(Metric.higher_is_better.is_(False)).first()
     assert metric is not None
@@ -1554,8 +1548,8 @@ def test_api_decision_rows_expose_sensitivity_scoring_fields(client, db):
     db.add_all([first, second])
     db.flush()
 
-    db.add(ActivityWeight(activity_id=first.id, metric_id=metric.id, weight=80))
-    db.add(ActivityWeight(activity_id=second.id, metric_id=metric.id, weight=20))
+    # Decision-level weight (shared)
+    db.add(DecisionWeight(decision_id=decision.id, metric_id=metric.id, weight=80))
     db.add(AlternativeScore(activity_id=first.id, metric_id=metric.id, score=10))
     db.add(AlternativeScore(activity_id=second.id, metric_id=metric.id, score=30))
     db.commit()
@@ -1567,6 +1561,6 @@ def test_api_decision_rows_expose_sensitivity_scoring_fields(client, db):
 
     assert row["metric_id"] == metric.id
     assert row["higher_is_better"] is False
-    assert row["weights"][str(first.id)] == 80
-    assert row["weights"][str(second.id)] == 20
+    # Decision-level weight: both activities use the same weight
+    assert row["weight"] == 80
     assert data["results"][0]["fit_score"] == 0.9
