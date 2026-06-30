@@ -1,4 +1,3 @@
-import { useMemo } from "react";
 import {
   Chart as ChartJS,
   RadialLinearScale,
@@ -37,32 +36,24 @@ const COLORS = [
   { bg: "rgba(168, 85, 247, 0.2)", border: "rgb(168, 85, 247)" },
 ];
 
-/** Read a CSS custom property from :root and return a comma-format hsl() string
- *  that Chart.js / canvas can actually render. Falls back to a readable gray. */
-function cssHsl(variable: string, fallback = "hsl(0, 0%, 50%)"): string {
-  if (typeof document === "undefined") return fallback;
-  const raw = getComputedStyle(document.documentElement)
-    .getPropertyValue(variable)
-    .trim();
-  if (!raw) return fallback;
-  // raw is e.g. "222.2 84% 4.9%" → split on whitespace
-  const parts = raw.split(/\s+/);
-  if (parts.length >= 3) {
-    return `hsl(${parts[0]}, ${parts[1]}, ${parts[2]})`;
-  }
-  return fallback;
+/** Pick high-contrast colours based on whether the page has the .dark class.
+ *  Using explicit strings instead of CSS variables because getComputedStyle
+ *  results are unreliable inside a <canvas> context. */
+function themeColors() {
+  const dark =
+    typeof document !== "undefined" &&
+    document.documentElement.classList.contains("dark");
+  return {
+    fg: dark ? "hsl(210, 40%, 98%)" : "hsl(222.2, 84%, 4.9%)",
+    popover: dark ? "hsl(222.2, 84%, 4.9%)" : "hsl(0, 0%, 100%)",
+    popoverFg: dark ? "hsl(210, 40%, 98%)" : "hsl(222.2, 84%, 4.9%)",
+    border: dark ? "hsl(217.2, 32.6%, 17.5%)" : "hsl(214.3, 31.8%, 91.4%)",
+    bg: dark ? "hsl(222.2, 84%, 4.9%)" : "hsl(0, 0%, 100%)",
+  };
 }
 
 export default function RadarChart({ labels, datasets }: RadarChartProps) {
-  // Resolve theme colours once so they work inside the <canvas>
-  const theme = useMemo(() => {
-    const fg = cssHsl("--foreground");
-    const popover = cssHsl("--popover");
-    const popoverFg = cssHsl("--popover-foreground");
-    const border = cssHsl("--border");
-    const bg = cssHsl("--background");
-    return { fg, popover, popoverFg, border, bg };
-  }, []);
+  const theme = themeColors();
 
   const data = {
     labels,
