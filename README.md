@@ -221,8 +221,7 @@ client-side React SPA that communicates exclusively with these API endpoints.
 ├── schemas.py                    # Pydantic schemas
 ├── database.py                   # Engine, session, get_db
 ├── routers/
-│   ├── api.py                    # JSON API endpoints (/api/*)
-│   └── metrics.py                # Metric endpoints for the global criteria set
+│   └── api.py                    # JSON API endpoints (/api/*)
 ├── services/
 │   ├── scoring.py                # Weighted MCDA score computation
 │   ├── robustness.py             # Monte Carlo sensitivity analysis
@@ -252,9 +251,6 @@ client-side React SPA that communicates exclusively with these API endpoints.
 - **Decision-level weights** (`DecisionWeight` model) are shared across all
   alternatives for a given decision. The old per-alternative `ActivityWeight`
   model has been removed.
-- **Metric mutation** exists for admin/development use via the `/api/metrics`
-  endpoints. The intended product model is a stable, pre-seeded criteria
-  framework — not arbitrary per-decision criteria creation.
 - The database defaults to SQLite. Other `sqlalchemy`-compatible databases may
   work via the `DATABASE_URL` environment variable, but only SQLite is tested
   in development and Docker.

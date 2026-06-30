@@ -99,7 +99,7 @@ def test_index_page(client, db):
 def test_create_metric(client, db):
     """Test creating a metric via API."""
     response = client.post(
-        "/metrics", json={"name": "Test Metric", "category": "Financial", "unit": "cm"}
+        "/api/metrics", json={"name": "Test Metric", "category": "Financial", "unit": "cm"}
     )
     assert response.status_code == 200
     data = response.json()
@@ -109,7 +109,7 @@ def test_create_metric(client, db):
 
 def test_list_metrics(client, db):
     """Test metrics page loads."""
-    response = client.get("/metrics")
+    response = client.get("/api/metrics")
     assert response.status_code == 200
 
 
@@ -151,40 +151,11 @@ def test_api_decide_rejects_too_many_parsed_alternatives(client, db):
 
 def test_delete_metric(client, db):
     """Test deleting a metric."""
-    resp = client.post("/metrics", json={"name": "Delete Me", "category": "Financial"})
+    resp = client.post("/api/metrics", json={"name": "Delete Me", "category": "Financial"})
     metric_id = resp.json()["id"]
 
-    response = client.delete(f"/metrics/{metric_id}")
+    response = client.delete(f"/api/metrics/{metric_id}")
     assert response.status_code == 200
-
-
-def test_add_sub_metric(client, db):
-    """Test adding a sub-metric."""
-    resp = client.post("/metrics", json={"name": "Parent", "category": "Financial"})
-    parent_id = resp.json()["id"]
-
-    response = client.post(
-        f"/metrics/{parent_id}/sub", json={"name": "Child", "category": "Financial"}
-    )
-    assert response.status_code == 200
-    data = response.json()
-    assert data["parent_id"] == parent_id
-
-
-def test_add_sub_metric_to_sub_metric_fails(client, db):
-    """Test that adding sub-metric to a sub-metric returns 400."""
-    resp = client.post("/metrics", json={"name": "Parent", "category": "Financial"})
-    parent_id = resp.json()["id"]
-
-    resp = client.post(
-        f"/metrics/{parent_id}/sub", json={"name": "Child", "category": "Financial"}
-    )
-    child_id = resp.json()["id"]
-
-    response = client.post(
-        f"/metrics/{child_id}/sub", json={"name": "Grandchild", "category": "Financial"}
-    )
-    assert response.status_code == 400
 
 
 # ── Decision flow tests ──
@@ -322,17 +293,17 @@ def test_decide_no_match(client, db):
 
 def test_metrics_page_requires_no_auth(client, db):
     """Test that metrics page loads."""
-    response = client.get("/metrics")
+    response = client.get("/api/metrics")
     assert response.status_code == 200
 
 
 def test_update_metric(client, db):
     """Test updating a metric."""
-    resp = client.post("/metrics", json={"name": "UpdateMe", "category": "Financial"})
+    resp = client.post("/api/metrics", json={"name": "UpdateMe", "category": "Financial"})
     metric_id = resp.json()["id"]
 
     response = client.put(
-        f"/metrics/{metric_id}", json={"name": "Updated", "category": "Quality"}
+        f"/api/metrics/{metric_id}", json={"name": "Updated", "category": "Quality"}
     )
     assert response.status_code == 200
     data = response.json()
@@ -341,9 +312,6 @@ def test_update_metric(client, db):
 
 def test_seeded_metrics_on_list_page(client, db):
     """Test that seeded universal metrics show on the metrics page."""
-    response = client.get("/metrics")
-    assert response.status_code == 200
-    response.json()
     # Use the API endpoint to get grouped metrics
     api_resp = client.get("/api/metrics")
     assert api_resp.status_code == 200

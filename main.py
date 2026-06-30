@@ -7,7 +7,6 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from database import Base, engine, get_db
-from routers import metrics
 from routers.api import router as api_router
 from services.parser import parse_question
 from services.decision_limits import enforce_decision_size
@@ -63,7 +62,6 @@ app.add_middleware(
 )
 
 # Include routers
-app.include_router(metrics.router)
 app.include_router(api_router)
 
 
