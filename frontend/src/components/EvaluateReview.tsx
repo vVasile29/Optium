@@ -9,7 +9,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Slider } from "@/components/ui/slider";
 import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Loader2, ArrowRight, ArrowUp, ArrowDown, Info } from "lucide-react";
+import { Loader2, ArrowRight, Info } from "lucide-react";
 import type { Metric } from "@/types";
 
 const DIMENSION_ORDER = [
@@ -278,19 +278,6 @@ export default function EvaluateReview() {
                       </span>
                     </div>
 
-                    {/* Direction indicator */}
-                    <div className="flex items-center gap-1 text-xs text-muted-foreground shrink-0">
-                      {metric.higher_is_better ? (
-                        <ArrowUp className="h-3 w-3 text-green-500" />
-                      ) : (
-                        <ArrowDown className="h-3 w-3 text-red-500" />
-                      )}
-                      <span>
-                        {metric.higher_is_better
-                          ? "Higher is better"
-                          : "Lower is better"}
-                      </span>
-                    </div>
                   </div>
                 ))}
               </div>

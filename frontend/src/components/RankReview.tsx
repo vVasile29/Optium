@@ -14,8 +14,6 @@ import {
   ArrowRight,
   Plus,
   X,
-  ArrowUp,
-  ArrowDown,
   Info,
 } from "lucide-react";
 import type { Metric } from "@/types";
@@ -321,19 +319,6 @@ export default function RankReview() {
                       </span>
                     </div>
 
-                    {/* Higher / Lower is better indicator */}
-                    <div className="flex items-center gap-1 text-xs text-muted-foreground shrink-0">
-                      {metric.higher_is_better ? (
-                        <ArrowUp className="h-3 w-3 text-green-500" />
-                      ) : (
-                        <ArrowDown className="h-3 w-3 text-red-500" />
-                      )}
-                      <span>
-                        {metric.higher_is_better
-                          ? "Higher is better"
-                          : "Lower is better"}
-                      </span>
-                    </div>
                   </div>
                 ))}
               </div>

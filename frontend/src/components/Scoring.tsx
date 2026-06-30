@@ -19,11 +19,12 @@ function scoreColor(value: number, higherIsBetter: boolean): string {
 }
 
 /** Label tick for a given score value. */
-function scoreLabel(value: number): string {
-  if (value >= 95) return "Excellent";
-  if (value >= 75) return "Good";
-  if (value >= 50) return "Average";
-  if (value >= 25) return "Below Avg";
+function scoreLabel(value: number, higherIsBetter: boolean): string {
+  const displayValue = higherIsBetter ? value : 100 - value;
+  if (displayValue >= 95) return "Excellent";
+  if (displayValue >= 75) return "Good";
+  if (displayValue >= 50) return "Average";
+  if (displayValue >= 25) return "Below Avg";
   return "Poor";
 }
 
@@ -153,9 +154,9 @@ export default function Scoring() {
                     {metric.name}
                   </span>
                   {metric.higher_is_better ? (
-                    <ArrowUp className="h-3 w-3 shrink-0 text-green-500" />
+                    <ArrowUp className="h-3 w-3 shrink-0 text-muted-foreground" />
                   ) : (
-                    <ArrowDown className="h-3 w-3 shrink-0 text-red-500" />
+                    <ArrowDown className="h-3 w-3 shrink-0 text-muted-foreground" />
                   )}
                 </div>
                 <span className="text-xs text-muted-foreground truncate">
@@ -191,7 +192,7 @@ export default function Scoring() {
                           {val}
                         </span>
                         <span className="text-[10px] text-muted-foreground leading-tight">
-                          {scoreLabel(val)}
+                          {scoreLabel(val, metric.higher_is_better)}
                         </span>
                       </div>
                     </div>
@@ -221,9 +222,9 @@ export default function Scoring() {
                           {metric.name}
                         </span>
                         {metric.higher_is_better ? (
-                          <ArrowUp className="h-3 w-3 shrink-0 text-green-500" />
+                          <ArrowUp className="h-3 w-3 shrink-0 text-muted-foreground" />
                         ) : (
-                          <ArrowDown className="h-3 w-3 shrink-0 text-red-500" />
+                          <ArrowDown className="h-3 w-3 shrink-0 text-muted-foreground" />
                         )}
                       </div>
                       <div className="flex items-center gap-1 shrink-0">
@@ -236,7 +237,7 @@ export default function Scoring() {
                           variant="outline"
                           className="text-[10px] px-1.5 py-0 h-5"
                         >
-                          {scoreLabel(val)}
+                          {scoreLabel(val, metric.higher_is_better)}
                         </Badge>
                       </div>
                     </div>
@@ -250,11 +251,23 @@ export default function Scoring() {
                       step={1}
                     />
                     <div className="flex justify-between text-[10px] text-muted-foreground">
-                      <span>Poor</span>
-                      <span>Below Avg</span>
-                      <span>Average</span>
-                      <span>Good</span>
-                      <span>Excellent</span>
+                      {metric.higher_is_better ? (
+                        <>
+                          <span>Poor</span>
+                          <span>Below Avg</span>
+                          <span>Average</span>
+                          <span>Good</span>
+                          <span>Excellent</span>
+                        </>
+                      ) : (
+                        <>
+                          <span>Excellent</span>
+                          <span>Good</span>
+                          <span>Average</span>
+                          <span>Below Avg</span>
+                          <span>Poor</span>
+                        </>
+                      )}
                     </div>
                   </div>
                 );
@@ -262,15 +275,6 @@ export default function Scoring() {
             </CardContent>
           </Card>
         ))}
-      </div>
-
-      {/* ── Desktop ticks legend ── */}
-      <div className="hidden md:flex justify-center gap-6 text-xs text-muted-foreground">
-        <span>0 — Poor</span>
-        <span>25 — Below Avg</span>
-        <span>50 — Average</span>
-        <span>75 — Good</span>
-        <span>100 — Excellent</span>
       </div>
 
       {/* ── Submit ── */}

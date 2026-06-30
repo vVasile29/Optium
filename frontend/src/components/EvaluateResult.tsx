@@ -158,9 +158,9 @@ export default function EvaluateResult() {
                         {metric.name}
                       </span>
                       {metric.higher_is_better ? (
-                        <ArrowUp className="h-3 w-3 shrink-0 text-green-500" />
+                        <ArrowUp className="h-3 w-3 shrink-0 text-muted-foreground" />
                       ) : (
-                        <ArrowDown className="h-3 w-3 shrink-0 text-red-500" />
+                        <ArrowDown className="h-3 w-3 shrink-0 text-muted-foreground" />
                       )}
                     </div>
                     <span className="text-sm font-mono tabular-nums ml-2">
@@ -175,11 +175,23 @@ export default function EvaluateResult() {
                     step={1}
                   />
                   <div className="flex justify-between text-[10px] text-muted-foreground">
-                    <span>Poor</span>
-                    <span>Below Avg</span>
-                    <span>Average</span>
-                    <span>Good</span>
-                    <span>Excellent</span>
+                    {metric.higher_is_better ? (
+                      <>
+                        <span>Poor</span>
+                        <span>Below Avg</span>
+                        <span>Average</span>
+                        <span>Good</span>
+                        <span>Excellent</span>
+                      </>
+                    ) : (
+                      <>
+                        <span>Excellent</span>
+                        <span>Good</span>
+                        <span>Average</span>
+                        <span>Below Avg</span>
+                        <span>Poor</span>
+                      </>
+                    )}
                   </div>
                 </div>
               );

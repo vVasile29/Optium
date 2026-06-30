@@ -12,8 +12,6 @@ import {
   ChevronUp,
   Trophy,
   ArrowRight,
-  ArrowUp,
-  ArrowDown,
 } from "lucide-react";
 import RadarChart from "@/components/RadarChart";
 import SignificanceBadge from "@/components/SignificanceBadge";
