@@ -3,16 +3,12 @@ import os
 
 from fastapi import FastAPI, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from database import Base, engine, get_db
 from routers import metrics
 from routers.api import router as api_router
-from routers.decisions import router as decisions_router
-from routers.evaluate import router as evaluate_router
-from routers.screen import router as screen_router
-from routers.rank import router as rank_router
 from services.parser import parse_question
 from services.decision_limits import enforce_decision_size
 
@@ -69,10 +65,6 @@ app.add_middleware(
 # Include routers
 app.include_router(metrics.router)
 app.include_router(api_router)
-app.include_router(decisions_router)
-app.include_router(evaluate_router)
-app.include_router(screen_router)
-app.include_router(rank_router)
 
 
 @app.get("/health")
@@ -175,9 +167,11 @@ async def decide(request: Request, db: Session = Depends(get_db)):
             db.flush()
             _seed_default_weights(decision.id)
             db.commit()
-            return RedirectResponse(
-                url=f"/evaluate/{decision.id}/review", status_code=303
-            )
+            return {
+                "decision_id": decision.id,
+                "mode": "diagnose",
+                "redirect_url": f"/decisions/{decision.id}/review",
+            }
 
         # If DIAGNOSE didn't match, try RANK
         from services.parser import extract_list
@@ -201,7 +195,11 @@ async def decide(request: Request, db: Session = Depends(get_db)):
             _seed_default_weights(decision.id)
 
             db.commit()
-            return RedirectResponse(url=f"/rank/{decision.id}/review", status_code=303)
+            return {
+                "decision_id": decision.id,
+                "mode": "rank",
+                "redirect_url": f"/decisions/{decision.id}/review",
+            }
 
     # Continue as CHOOSE
     enforce_decision_size(len(alternatives), len(UNIVERSAL_METRICS))

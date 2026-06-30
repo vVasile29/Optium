@@ -139,91 +139,12 @@ def test_api_refine_rejects_too_many_selected_metrics(client, db):
     assert response.status_code == 422
 
 
-def test_decision_refine_rejects_too_many_alternatives(client, db):
-    decision = Decision(query="Pick one", category="General")
-    db.add(decision)
-    db.commit()
-    metric = db.query(Metric).first()
-    form = {
-        f"alt_name_{index}": f"Option {index}"
-        for index in range(MAX_DECISION_ALTERNATIVES + 1)
-    }
-    form.update(
-        {
-            "metric_id_0": str(metric.id),
-            "include_metric_0": "on",
-            "criterion_weight_0": "50",
-            "criterion_higher_0": "true",
-        }
-    )
-
-    response = client.post(f"/decisions/{decision.id}/refine", data=form)
-
-    assert response.status_code == 422
-
-
 def test_api_decide_rejects_too_many_parsed_alternatives(client, db):
     query = ", ".join(
         f"Option {index}" for index in range(MAX_DECISION_ALTERNATIVES + 1)
     )
 
     response = client.post("/api/decide", json={"q": query})
-
-    assert response.status_code == 422
-
-
-def test_rank_create_rejects_too_many_parsed_alternatives(client, db):
-    query = ", ".join(
-        f"Option {index}" for index in range(MAX_DECISION_ALTERNATIVES + 1)
-    )
-
-    response = client.post("/rank", data={"q": query})
-
-    assert response.status_code == 422
-
-
-def test_rank_refine_rejects_too_many_alternatives(client, db):
-    decision = Decision(query="Rank", category="General", mode="rank")
-    db.add(decision)
-    db.commit()
-    metric = db.query(Metric).first()
-    form = {
-        f"alt_name_{index}": f"Option {index}"
-        for index in range(MAX_DECISION_ALTERNATIVES + 1)
-    }
-    form.update(
-        {
-            "metric_id_0": str(metric.id),
-            "include_metric_0": "on",
-            "criterion_weight_0": "50",
-            "criterion_higher_0": "true",
-        }
-    )
-
-    response = client.post(f"/rank/{decision.id}/refine", data=form)
-
-    assert response.status_code == 422
-
-
-def test_screen_refine_rejects_too_many_alternatives(client, db):
-    decision = Decision(query="Screen", category="General", mode="screen")
-    db.add(decision)
-    db.commit()
-    metric = db.query(Metric).first()
-    form = {
-        f"alt_name_{index}": f"Option {index}"
-        for index in range(MAX_DECISION_ALTERNATIVES + 1)
-    }
-    form.update(
-        {
-            "metric_id_0": str(metric.id),
-            "include_metric_0": "on",
-            "criterion_weight_0": "50",
-            "criterion_higher_0": "true",
-        }
-    )
-
-    response = client.post(f"/screen/{decision.id}/refine", data=form)
 
     assert response.status_code == 422
 
@@ -299,192 +220,6 @@ def test_decide_flow_with_do_verb(client, db):
     )
 
 
-def test_review_page_get(client, db):
-    """GET /decisions/{id}/review returns the review data."""
-    # Create a decision first
-    resp = client.post("/decide", data={"q": "Tea or Coffee?"})
-    assert resp.status_code == 200
-    data = resp.json()
-    decision_id = data["decision_id"]
-
-    # GET the review page
-    review_resp = client.get(f"/decisions/{decision_id}/review")
-    assert review_resp.status_code == 200
-    review_data = review_resp.json()
-    assert "alternatives" in review_data
-    assert "Tea" in str(review_data["alternatives"]) or "tea" in str(
-        review_data["alternatives"]
-    )
-    assert "Coffee" in str(review_data["alternatives"]) or "coffee" in str(
-        review_data["alternatives"]
-    )
-
-
-def test_delete_decision(client, db):
-    """POST /decisions/{id}/delete removes the decision and redirects."""
-    # Create a decision with refine + scores
-    resp = client.post("/decide", data={"q": "Tea or Coffee?"})
-    assert resp.status_code == 200
-    decision_id = resp.json()["decision_id"]
-
-    # Verify it exists
-    from models import Decision
-
-    assert db.query(Decision).filter(Decision.id == decision_id).first() is not None
-
-    # Delete it (don't follow redirect — we want the 303)
-    del_resp = client.post(f"/decisions/{decision_id}/delete", follow_redirects=False)
-    assert del_resp.status_code == 303  # redirect
-
-    # Verify it's gone
-    assert db.query(Decision).filter(Decision.id == decision_id).first() is None
-
-
-def test_delete_decision_not_found(client, db):
-    """POST /decisions/99999/delete returns 404."""
-    resp = client.post("/decisions/99999/delete")
-    assert resp.status_code == 404
-
-
-def test_review_page_not_found(client, db):
-    """GET /decisions/99999/review returns 404."""
-    resp = client.get("/decisions/99999/review")
-    assert resp.status_code == 404
-
-
-def test_decision_list_page(client, db):
-    """Test decisions list endpoint."""
-    response = client.get("/decisions")
-    assert response.status_code == 200
-    data = response.json()
-    assert "decisions" in data
-    assert isinstance(data["decisions"], list)
-
-
-def test_decision_list_mode_aware_result_links(client, db):
-    """Decisions list includes mode-specific result URLs."""
-    from models import Decision
-
-    decisions = [
-        Decision(query="House or Apartment?", category="General", mode="choose"),
-        Decision(query="How good is Tesla?", category="General", mode="diagnose"),
-        Decision(query="Cost <= 60", category="General", mode="screen"),
-        Decision(query="Rank Python, Java, Go", category="General", mode="rank"),
-    ]
-    db.add_all(decisions)
-    db.commit()
-
-    response = client.get("/api/decisions")
-    assert response.status_code == 200
-    data = response.json()
-    assert len(data["decisions"]) == 4
-    result_urls = [d["result_url"] for d in data["decisions"]]
-    assert f"/decisions/{decisions[0].id}/result" in result_urls
-    assert f"/evaluate/{decisions[1].id}/result" in result_urls
-    assert f"/screen/{decisions[2].id}/result" in result_urls
-    assert f"/rank/{decisions[3].id}/result" in result_urls
-
-
-def test_delete_decision_redirect_param(client, db):
-    """Delete redirect query parameter can keep the user on /decisions."""
-    from models import Decision
-
-    decision = Decision(query="Tea or Coffee?", category="General", mode="choose")
-    db.add(decision)
-    db.commit()
-
-    response = client.post(
-        f"/decisions/{decision.id}/delete?redirect=/decisions",
-        follow_redirects=False,
-    )
-    assert response.status_code == 303
-    assert response.headers["location"] == "/decisions"
-    assert db.query(Decision).filter(Decision.id == decision.id).first() is None
-
-
-def test_delete_decision_rejects_external_redirect(client, db):
-    """Delete redirect query parameter rejects external destinations."""
-    from models import Decision
-
-    decision = Decision(query="Tea or Coffee?", category="General", mode="choose")
-    db.add(decision)
-    db.commit()
-
-    response = client.post(
-        f"/decisions/{decision.id}/delete?redirect=https://evil.example",
-        follow_redirects=False,
-    )
-    assert response.status_code == 303
-    assert response.headers["location"] == "/"
-    assert db.query(Decision).filter(Decision.id == decision.id).first() is None
-
-
-def test_decision_refine_and_score(client, db):
-    """Test the refine and score endpoints."""
-    # First create a decision via /decide
-    resp = client.post("/decide", data={"q": "House or Apartment?"})
-    assert resp.status_code == 200
-    decision_id = resp.json()["decision_id"]
-
-    # Get metric IDs from the seeded metrics
-    from models import Metric
-
-    metrics = db.query(Metric).all()
-    metric_id = metrics[0].id if metrics else 1
-
-    # Refine the decision using global metric IDs
-    refine_resp = client.post(
-        f"/decisions/{decision_id}/refine",
-        data={
-            "alt_name_0": "House",
-            "alt_name_1": "Apartment",
-            "metric_id_0": str(metric_id),
-            "include_metric_0": "true",
-            "criterion_weight_0": "80",
-            "criterion_higher_0": "false",
-        },
-        follow_redirects=False,
-    )
-    assert refine_resp.status_code == 303
-
-    # Follow redirect to scoring page
-    score_resp = client.get(refine_resp.headers["location"])
-    assert score_resp.status_code == 200
-    score_data = score_resp.json()
-    assert "criteria" in score_data
-    assert "activities" in score_data or "alternatives" in score_data
-
-
-def test_refine_with_native_form_values(client, db):
-    """Refine must accept 'on' as checkbox value (native HTML form submission)."""
-    resp = client.post("/decide", data={"q": "X or Y?"})
-    assert resp.status_code == 200
-    decision_id = resp.json()["decision_id"]
-
-    from models import Metric
-
-    metrics = db.query(Metric).order_by(Metric.id).all()
-    assert len(metrics) >= 2
-
-    # Submit with 'on' (native browser behavior) instead of 'true' (Alpine.js)
-    refine_resp = client.post(
-        f"/decisions/{decision_id}/refine",
-        data={
-            "alt_name_0": "X",
-            "alt_name_1": "Y",
-            "include_metric_0": "on",
-            "metric_id_0": str(metrics[0].id),
-            "criterion_weight_0": "80",
-            "include_metric_1": "on",
-            "metric_id_1": str(metrics[1].id),
-            "criterion_weight_1": "70",
-        },
-        follow_redirects=False,
-    )
-    # Should redirect to scoring, not re-render with error
-    assert refine_resp.status_code == 303
-
-
 def test_ontology_parsing(client, db):
     """Test that ontology-based parsing works via /decide."""
     response = client.post("/decide", data={"q": "Which job offer should I take?"})
@@ -495,17 +230,20 @@ def test_ontology_parsing(client, db):
 
 
 def test_decision_not_found(client, db):
-    """Test 404 for non-existent decision."""
-    response = client.get("/decisions/99999/result")
+    """Test 404 for non-existent decision via API."""
+    response = client.get("/api/decisions/99999")
     assert response.status_code == 404
 
-    response = client.get("/decisions/99999/score")
+    response = client.post(
+        "/api/decisions/99999/refine",
+        json={"alternatives": ["Test"], "metrics": [{"metric_id": 1, "weight": 50}]},
+    )
     assert response.status_code == 404
 
-    response = client.post("/decisions/99999/refine", data={"alt_name_0": "Test"})
-    assert response.status_code == 404
-
-    response = client.post("/decisions/99999/score", data={"score_1_1": "50"})
+    response = client.post(
+        "/api/decisions/99999/score",
+        json={"scores": [{"activity_id": 1, "metric_id": 1, "score": 50}]},
+    )
     assert response.status_code == 404
 
 
@@ -523,50 +261,31 @@ def test_full_decision_flow(client, db):
     all_metrics = db.query(Metric).order_by(Metric.id).all()
     assert len(all_metrics) >= 2
 
-    # Step 2: Refine with 2 alternatives, 3 metrics
+    # Step 2: Refine with 2 alternatives, 3 metrics via API
     refine_resp = client.post(
-        f"/decisions/{decision_id}/refine",
-        data={
-            "alt_name_0": "Tea",
-            "alt_name_1": "Coffee",
-            "metric_id_0": str(all_metrics[0].id),
-            "include_metric_0": "true",
-            "criterion_weight_0": "85",
-            "criterion_higher_0": "true",
-            "metric_id_1": str(all_metrics[1].id),
-            "include_metric_1": "true",
-            "criterion_weight_1": "70",
-            "criterion_higher_1": "true",
-            "metric_id_2": str(all_metrics[2].id),
-            "include_metric_2": "true",
-            "criterion_weight_2": "50",
-            "criterion_higher_2": "false",
+        f"/api/decisions/{decision_id}/refine",
+        json={
+            "alternatives": ["Tea", "Coffee"],
+            "metrics": [
+                {"metric_id": all_metrics[0].id, "weight": 85},
+                {"metric_id": all_metrics[1].id, "weight": 70},
+                {"metric_id": all_metrics[2].id, "weight": 50},
+            ],
         },
-        follow_redirects=False,
     )
-    assert refine_resp.status_code == 303
+    assert refine_resp.status_code == 200
+    refine_data = refine_resp.json()
+    assert "activities" in refine_data
+    assert "criteria" in refine_data
 
-    # Follow redirect
-    client.get(refine_resp.headers["location"])
-
-    # Step 3: Score page should load
-    score_page = client.get(f"/decisions/{decision_id}/score")
-    assert score_page.status_code == 200
-    score_data = score_page.json()
-    # Should show both alternatives and all criteria
-    activity_names = [a.get("name", "") for a in score_data.get("activities", [])]
-    assert "Tea" in activity_names
-    assert "Coffee" in activity_names
-
-    # Step 4: Submit scores via the API endpoint
-
+    # Step 3: Submit scores via the API endpoint
     score_resp = client.post(
         f"/api/decisions/{decision_id}/score",
         json={
             "scores": [
                 {"activity_id": act["id"], "metric_id": m["id"], "score": 70}
-                for act in score_data["activities"]
-                for m in score_data["criteria"]
+                for act in refine_data["activities"]
+                for m in refine_data["criteria"]
             ]
         },
     )
@@ -575,7 +294,7 @@ def test_full_decision_flow(client, db):
     assert "results" in result_data
     assert "series" in result_data
 
-    # Step 5: Check result page via API
+    # Step 4: Check result page via API
     api_result = client.get(f"/api/decisions/{decision_id}")
     assert api_result.status_code == 200
     api_data = api_result.json()
@@ -644,114 +363,10 @@ def test_seeded_metrics_on_list_page(client, db):
 # ── Evaluate (DIAGNOSE) tests ──
 
 
-def test_evaluate_how_good(client, db):
-    """How good is X for Y → review page shows subject"""
-    response = client.post(
-        "/evaluate",
-        data={"q": "How good is a Tesla for commuting?"},
-        follow_redirects=False,
-    )
-    assert response.status_code == 303
-    # Follow redirect to review page
-    response = client.get(response.headers["location"])
-    assert response.status_code == 200
-    data = response.json()
-    # Check that "Tesla" appears somewhere in the serialized data
-    assert "Tesla" in str(data)
-
-
-def test_evaluate_rate_my(client, db):
-    """Rate my X → review page shows subject"""
-    response = client.post(
-        "/evaluate", data={"q": "Rate my portfolio"}, follow_redirects=False
-    )
-    assert response.status_code == 303
-    response = client.get(response.headers["location"])
-    assert response.status_code == 200
-
-
-def test_evaluate_no_match(client, db):
-    """No match → fallback subject"""
-    response = client.post(
-        "/evaluate", data={"q": "Hello world"}, follow_redirects=False
-    )
-    assert response.status_code == 303
-    response = client.get(response.headers["location"])
-    assert response.status_code == 200
-    data = response.json()
-    # Fallback: should contain the query text somewhere in the serialized data
-    assert "Hello" in str(data) or "This option" in str(data)
-
-
-def test_evaluate_empty_query(client, db):
-    """Empty query → error"""
-    response = client.post("/evaluate", data={"q": ""})
-    assert response.status_code == 200
-    data = response.json()
-    assert "error" in data or "_template" in data
-
-
-def test_evaluate_flow(client, db):
-    """Full flow: evaluate → refine → score → result"""
-    # Create evaluation
-    resp = client.post(
-        "/evaluate",
-        data={"q": "How good is Python for data science?"},
-        follow_redirects=False,
-    )
-    assert resp.status_code == 303
-    import re
-
-    review_url = resp.headers["location"]
-    decision_id = re.search(r"/evaluate/(\d+)/review", review_url).group(1)
-
-    # Refine: submit with criteria
-    resp = client.post(
-        f"/evaluate/{decision_id}/refine",
-        data={
-            "alt_name_0": "Python",
-            "metric_id_0": "1",
-            "include_metric_0": "true",
-            "criterion_weight_0": "80",
-            "criterion_higher_0": "true",
-        },
-        follow_redirects=False,
-    )
-    assert resp.status_code == 303
-    score_url = resp.headers["location"]
-    assert "/score" in score_url
-
-    # Follow to score page
-    resp = client.get(score_url)
-    assert resp.status_code == 200
-    score_data = resp.json()
-
-    # Score: submit scores using API endpoint
-    if score_data.get("activities") and score_data.get("criteria"):
-        act_id = score_data["activities"][0]["id"]
-        met_id = score_data["criteria"][0]["id"]
-        score_resp = client.post(
-            f"/api/decisions/{decision_id}/score",
-            json={
-                "scores": [{"activity_id": act_id, "metric_id": met_id, "score": 85}]
-            },
-        )
-        assert score_resp.status_code == 200
-        result_data = score_resp.json()
-        assert "results" in result_data
-
-        # Check result via API
-        api_result = client.get(f"/api/evaluate/{decision_id}")
-        assert api_result.status_code == 200
-        api_data = api_result.json()
-        assert "results" in api_data
-        assert "Python" in str(api_data)
-
-
 def test_evaluate_result_returns_single_option_robustness(client, db):
     decision = _seed_scored_decision(db, "diagnose")
 
-    response = client.get(f"/evaluate/{decision.id}/result")
+    response = client.get(f"/api/evaluate/{decision.id}")
     assert response.status_code == 200
     data = response.json()
     robustness = data["robustness"]
@@ -775,38 +390,20 @@ def test_evaluate_result_returns_single_option_robustness(client, db):
 
 def test_evaluate_not_found(client, db):
     """404 for nonexistent evaluation"""
-    resp = client.get("/evaluate/99999/result")
+    resp = client.get("/api/evaluate/99999")
     assert resp.status_code == 404
 
 
-def test_evaluate_delete(client, db):
-    """Delete evaluation"""
-    resp = client.post(
-        "/evaluate", data={"q": "How good is Go?"}, follow_redirects=False
-    )
-    decision_id = resp.headers["location"].split("/")[2]
-    resp = client.post(f"/evaluate/{decision_id}/delete", follow_redirects=False)
-    assert resp.status_code == 303
-
-
 def test_decide_routes_to_diagnose(client, db):
-    """DIAGNOSE-style query via /decide → redirect to /evaluate/{id}/review"""
+    """DIAGNOSE-style query via /decide → returns JSON with diagnose mode"""
     resp = client.post(
         "/decide",
         data={"q": "How good is a Tesla for commuting?"},
-        follow_redirects=False,
     )
-    # Must redirect to evaluate (DIAGNOSE), not decisions (CHOOSE)
-    assert resp.status_code == 303
-    assert resp.headers["location"].startswith("/evaluate/")
-    assert "/review" in resp.headers["location"]
-
-    # Follow redirect to verify review page
-    resp = client.get(resp.headers["location"])
     assert resp.status_code == 200
     data = resp.json()
-    assert "Tesla" in str(data)
-    assert "commuting" in str(data)
+    assert data["mode"] == "diagnose"
+    assert "decision_id" in data
 
 
 def test_decide_with_choose_query_still_works(client, db):
@@ -834,46 +431,11 @@ def test_decide_with_no_match_fallback(client, db):
     assert "decision_id" in data
 
 
-# ── SCREEN (Mode 3) tests ──
-
-
-def test_screen_direct_still_works(client, db):
-    """Direct POST /screen still works (backward compat)"""
-    resp = client.post(
-        "/screen", data={"q": "Screen jobs by cost"}, follow_redirects=False
-    )
-    assert resp.status_code == 303
-    import re
-
-    decision_id = re.search(r"/screen/(\d+)/review", resp.headers["location"]).group(1)
-
-    # GET the review page
-    review_resp = client.get(f"/screen/{decision_id}/review")
-    assert review_resp.status_code == 200
-    data = review_resp.json()
-    assert "alternatives" in data or "activities" in data
-
-
-def test_screen_review_page(client, db):
-    """GET /screen/{id}/review loads review data"""
-    # Create via /screen POST
-    resp = client.post(
-        "/screen", data={"q": "Screen jobs by cost"}, follow_redirects=False
-    )
-    assert resp.status_code == 303
-    import re
-
-    decision_id = re.search(r"/screen/(\d+)/review", resp.headers["location"]).group(1)
-
-    # GET the review page
-    review_resp = client.get(f"/screen/{decision_id}/review")
-    assert review_resp.status_code == 200
-    data = review_resp.json()
-    assert "alternatives" in data or "activities" in data
+# ── SCREEN (backward compat via API) tests ──
 
 
 def test_screen_backward_compat_result(client, db):
-    """Existing screen decisions still return result data (backward compat)"""
+    """Existing screen decisions still return result data via API (backward compat)"""
     from models import Activity, Decision
 
     decision = Decision(query="Cost <= 60", category="General", mode="screen")
@@ -886,59 +448,31 @@ def test_screen_backward_compat_result(client, db):
     db.add(activity)
     db.commit()
 
-    resp = client.get(f"/screen/{decision.id}/result")
+    resp = client.get(f"/api/screen/{decision.id}")
     assert resp.status_code == 200
     data = resp.json()
     assert "decision" in data or "results" in data
 
 
 def test_screen_not_found(client, db):
-    """404 for nonexistent screening"""
-    resp = client.get("/screen/99999/review")
+    """404 for nonexistent screening via API"""
+    resp = client.get("/api/screen/99999")
     assert resp.status_code == 404
-
-
-def test_screen_delete(client, db):
-    """Delete screen"""
-    resp = client.post("/screen", data={"q": "Screen test"}, follow_redirects=False)
-    decision_id = resp.headers["location"].split("/")[2]
-    resp = client.post(f"/screen/{decision_id}/delete", follow_redirects=False)
-    assert resp.status_code == 303
 
 
 # ── RANK (Mode 4) tests ──
 
 
 def test_rank_via_decide(client, db):
-    """List query via /decide → redirect to /rank/{id}/review"""
+    """List query via /decide → returns JSON with rank mode"""
     resp = client.post(
         "/decide",
         data={"q": "Rank Python, Java, Go"},
-        follow_redirects=False,
     )
-    assert resp.status_code == 303
-    assert resp.headers["location"].startswith("/rank/")
-    assert "/review" in resp.headers["location"]
-
-    # Follow redirect
-    resp = client.get(resp.headers["location"])
     assert resp.status_code == 200
     data = resp.json()
-    assert "alternatives" in data or "activities" in data
-
-
-def test_rank_review_page(client, db):
-    """GET /rank/{id}/review loads review data"""
-    resp = client.post("/rank", data={"q": "Python, Java, Go"}, follow_redirects=False)
-    assert resp.status_code == 303
-    import re
-
-    decision_id = re.search(r"/rank/(\d+)/review", resp.headers["location"]).group(1)
-
-    review_resp = client.get(f"/rank/{decision_id}/review")
-    assert review_resp.status_code == 200
-    data = review_resp.json()
-    assert "alternatives" in data or "activities" in data
+    assert data["mode"] == "rank"
+    assert "decision_id" in data
 
 
 def test_rank_flow(client, db):
@@ -946,12 +480,10 @@ def test_rank_flow(client, db):
     resp = client.post(
         "/decide",
         data={"q": "Python, Java, Go"},
-        follow_redirects=False,
     )
-    assert resp.status_code == 303
-    import re
-
-    decision_id = re.search(r"/rank/(\d+)/review", resp.headers["location"]).group(1)
+    assert resp.status_code == 200
+    data = resp.json()
+    decision_id = data["decision_id"]
 
     # Get metric IDs
     from models import Metric
@@ -959,55 +491,36 @@ def test_rank_flow(client, db):
     metrics = db.query(Metric).order_by(Metric.id).all()
     assert len(metrics) >= 1
 
-    # Refine
+    # Refine via API
     refine_resp = client.post(
-        f"/rank/{decision_id}/refine",
-        data={
-            "alt_name_0": "Python",
-            "alt_name_1": "Java",
-            "alt_name_2": "Go",
-            "metric_id_0": str(metrics[0].id),
-            "include_metric_0": "true",
-            "criterion_weight_0": "80",
-            "criterion_higher_0": "true",
+        f"/api/decisions/{decision_id}/refine",
+        json={
+            "alternatives": ["Python", "Java", "Go"],
+            "metrics": [{"metric_id": metrics[0].id, "weight": 80}],
         },
-        follow_redirects=False,
     )
-    assert refine_resp.status_code == 303
-
-    # Follow to score page
-    score_page = client.get(refine_resp.headers["location"])
-    assert score_page.status_code == 200
-    score_data = score_page.json()
+    assert refine_resp.status_code == 200
+    refine_data = refine_resp.json()
 
     # Submit scores via API
-    if score_data.get("activities") and score_data.get("criteria"):
-        scores = [
-            {"activity_id": a["id"], "metric_id": m["id"], "score": 70}
-            for a in score_data["activities"]
-            for m in score_data["criteria"]
-        ]
-        score_resp = client.post(
-            f"/api/decisions/{decision_id}/score",
-            json={"scores": scores},
-        )
-        assert score_resp.status_code == 200
-        result_data = score_resp.json()
-        assert "results" in result_data
+    scores = [
+        {"activity_id": a["id"], "metric_id": m["id"], "score": 70}
+        for a in refine_data["activities"]
+        for m in refine_data["criteria"]
+    ]
+    score_resp = client.post(
+        f"/api/decisions/{decision_id}/score",
+        json={"scores": scores},
+    )
+    assert score_resp.status_code == 200
+    result_data = score_resp.json()
+    assert "results" in result_data
 
 
 def test_rank_not_found(client, db):
-    """404 for nonexistent ranking"""
-    resp = client.get("/rank/99999/review")
+    """404 for nonexistent ranking via API"""
+    resp = client.get("/api/rank/99999")
     assert resp.status_code == 404
-
-
-def test_rank_delete(client, db):
-    """Delete ranking"""
-    resp = client.post("/rank", data={"q": "A, B, C"}, follow_redirects=False)
-    decision_id = resp.headers["location"].split("/")[2]
-    resp = client.post(f"/rank/{decision_id}/delete", follow_redirects=False)
-    assert resp.status_code == 303
 
 
 def test_rank_two_items_fallback(client, db):
@@ -1015,53 +528,42 @@ def test_rank_two_items_fallback(client, db):
     resp = client.post(
         "/decide",
         data={"q": "A, B"},
-        follow_redirects=False,
     )
-    # For 2 items, the system may return JSON directly (CHOOSE) or redirect
-    assert resp.status_code in (200, 303)
-    # Should NOT redirect to rank (fewer than 3 items)
-    if resp.status_code == 303:
-        assert not resp.headers.get("location", "").startswith("/rank/")
+    # Returns JSON directly (CHOOSE)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["mode"] == "choose"
 
 
 def test_rank_result_reuses_decision_result(client, db):
-    """Rank result page shows ranking data"""
-    # Create a rank with 3 items and score them
-    resp = client.post("/rank", data={"q": "X, Y, Z"}, follow_redirects=False)
-    assert resp.status_code == 303
-    import re
-
-    decision_id = re.search(r"/rank/(\d+)/review", resp.headers["location"]).group(1)
+    """Rank result page shows ranking data via API"""
+    # Create a decision with rank mode via /decide
+    resp = client.post("/decide", data={"q": "X, Y, Z"})
+    assert resp.status_code == 200
+    data = resp.json()
+    decision_id = data["decision_id"]
 
     from models import Metric
 
     metrics = db.query(Metric).order_by(Metric.id).all()
     assert len(metrics) >= 1
 
-    # Refine
+    # Refine via API
     refine_resp = client.post(
-        f"/rank/{decision_id}/refine",
-        data={
-            "alt_name_0": "X",
-            "alt_name_1": "Y",
-            "alt_name_2": "Z",
-            "metric_id_0": str(metrics[0].id),
-            "include_metric_0": "true",
-            "criterion_weight_0": "80",
-            "criterion_higher_0": "true",
+        f"/api/decisions/{decision_id}/refine",
+        json={
+            "alternatives": ["X", "Y", "Z"],
+            "metrics": [{"metric_id": metrics[0].id, "weight": 80}],
         },
-        follow_redirects=False,
     )
-    assert refine_resp.status_code == 303
-
-    score_page = client.get(refine_resp.headers["location"])
-    score_data = score_page.json()
+    assert refine_resp.status_code == 200
+    refine_data = refine_resp.json()
 
     # Submit scores via API
     scores = [
         {"activity_id": a["id"], "metric_id": m["id"], "score": 70}
-        for a in score_data["activities"]
-        for m in score_data["criteria"]
+        for a in refine_data["activities"]
+        for m in refine_data["criteria"]
     ]
     client.post(f"/api/decisions/{decision_id}/score", json={"scores": scores})
 
@@ -1077,7 +579,6 @@ def test_decide_heuristic_routing(client, db):
     resp = client.post(
         "/decide",
         data={"q": "Should I buy a house or an apartment?"},
-        follow_redirects=False,
     )
     assert resp.status_code == 200
     data = resp.json()
@@ -1087,26 +588,26 @@ def test_decide_heuristic_routing(client, db):
     resp3 = client.post(
         "/decide",
         data={"q": "Rank Python, Java, Go"},
-        follow_redirects=False,
     )
-    assert resp3.status_code == 303
-    assert resp3.headers["location"].startswith("/rank/")
+    assert resp3.status_code == 200
+    data3 = resp3.json()
+    assert data3["mode"] == "rank"
 
     # Heuristic diagnose detection
     resp4 = client.post(
         "/decide",
         data={"q": "How good is Rust?"},
-        follow_redirects=False,
     )
-    assert resp4.status_code == 303
-    assert resp4.headers["location"].startswith("/evaluate/")
+    assert resp4.status_code == 200
+    data4 = resp4.json()
+    assert data4["mode"] == "diagnose"
 
 
 # ── Threshold filter tests (post-hoc on decision result page) ──
 
 
 def _create_decision_with_metric(client, db, query="House or Apartment?"):
-    """Helper: create a decision via /decide, refine with 1 metric, return decision_id and metric_id."""
+    """Helper: create a decision via /decide, refine with 1 metric via API, return decision_id and metric_id."""
     resp = client.post("/decide", data={"q": query})
     assert resp.status_code == 200
     decision_id = resp.json()["decision_id"]
@@ -1118,33 +619,28 @@ def _create_decision_with_metric(client, db, query="House or Apartment?"):
     assert metric is not None
     metric_id = metric.id
 
-    # Refine with this metric and 2 alternatives
+    # Refine with this metric and 2 alternatives via API
     refine_resp = client.post(
-        f"/decisions/{decision_id}/refine",
-        data={
-            "alt_name_0": "House",
-            "alt_name_1": "Apartment",
-            "metric_id_0": str(metric_id),
-            "include_metric_0": "true",
-            "criterion_weight_0": "80",
-            "criterion_higher_0": "true",
+        f"/api/decisions/{decision_id}/refine",
+        json={
+            "alternatives": ["House", "Apartment"],
+            "metrics": [{"metric_id": metric_id, "weight": 80}],
         },
-        follow_redirects=False,
     )
-    assert refine_resp.status_code == 303
+    assert refine_resp.status_code == 200
     return decision_id, metric_id
 
 
 def test_decision_result_threshold_panel_renders(client, db):
-    """Result page includes threshold data."""
+    """Result data includes decision details via API."""
     decision_id, _ = _create_decision_with_metric(client, db)
 
-    # Fetch result page
-    resp = client.get(f"/decisions/{decision_id}/result")
+    # Fetch result via API
+    resp = client.get(f"/api/decisions/{decision_id}")
     assert resp.status_code == 200
     data = resp.json()
-    # The result page now contains JSON context; check for relevant keys
-    assert "decision" in data or "_template" in data
+    assert "decision" in data
+    assert "results" in data
 
 
 def test_decision_apply_thresholds_valid(client, db):
@@ -1325,8 +821,6 @@ def test_decision_result_robustness_uses_saved_threshold_survivors(client, db):
     third = Activity(name="Filtered", category="General", decision_id=decision.id)
     db.add(third)
     db.flush()
-    # No need to create DecisionWeight for third — weights are decision-level
-    # and already exist from _seed_scored_decision
     for score in winner_scores:
         mid = score.metric_id
         db.add(AlternativeScore(activity_id=third.id, metric_id=mid, score=95))
@@ -1335,7 +829,7 @@ def test_decision_result_robustness_uses_saved_threshold_survivors(client, db):
     stored.thresholds = '[{"metric_id": %d, "operator": "<=", "value": 80}]' % metric_id
     db.commit()
 
-    response = client.get(f"/decisions/{decision.id}/result")
+    response = client.get(f"/api/decisions/{decision.id}")
     assert response.status_code == 200
     data = response.json()
 
@@ -1367,7 +861,7 @@ def test_decision_result_robustness_handles_no_threshold_survivors(client, db):
     stored.thresholds = '[{"metric_id": %d, "operator": "<=", "value": 10}]' % metric_id
     db.commit()
 
-    response = client.get(f"/decisions/{decision.id}/result")
+    response = client.get(f"/api/decisions/{decision.id}")
     assert response.status_code == 200
     data = response.json()
 
@@ -1375,7 +869,8 @@ def test_decision_result_robustness_handles_no_threshold_survivors(client, db):
     assert data["robustness"] is None
 
 
-def test_decision_invalid_threshold_form_uses_saved_threshold_survivors(client, db):
+def test_decision_invalid_threshold_via_api_uses_saved_threshold_survivors(client, db):
+    """Invalid threshold input via API returns 422; saved thresholds still apply."""
     decision = _seed_scored_decision(db, "choose")
 
     from models import AlternativeScore, Decision
@@ -1391,18 +886,19 @@ def test_decision_invalid_threshold_form_uses_saved_threshold_survivors(client, 
     stored.thresholds = '[{"metric_id": %d, "operator": "<=", "value": 10}]' % metric_id
     db.commit()
 
+    # Attempt invalid threshold via API — should reject
     response = client.post(
-        f"/decisions/{decision.id}/thresholds",
-        data={
-            "threshold_metric_id_0": str(metric_id),
-            "threshold_op_0": "<=",
-            "threshold_val_0": "not-a-number",
+        f"/api/decisions/{decision.id}/thresholds",
+        json={
+            "thresholds": [{"metric_id": metric_id, "operator": "<=", "value": "not-a-number"}]
         },
     )
-    assert response.status_code == 200
-    data = response.json()
+    assert response.status_code == 422
 
-    assert data["threshold_errors"]
+    # Saved thresholds should still apply when fetching result
+    result = client.get(f"/api/decisions/{decision.id}")
+    assert result.status_code == 200
+    data = result.json()
     assert data["filter_result"]["survivor_results"] == []
     assert data["robustness"] is None
 
@@ -1518,19 +1014,15 @@ def test_result_pages_include_robustness_and_null_compatibility_key(client, db):
 
 def test_slider_fill_markup_and_sensitivity_classes(client, db):
     decision = _seed_scored_decision(db, "choose")
-    score_page = client.get(f"/decisions/{decision.id}/score")
-    assert score_page.status_code == 200
-    score_data = score_page.json()
-    # Score page should contain criteria and activities
-    assert "criteria" in score_data
-    assert "activities" in score_data
 
-    result_page = client.get(f"/api/decisions/{decision.id}")
-    assert result_page.status_code == 200
-    result_data = result_page.json()
-    # Result should contain results and series
-    assert "results" in result_data
-    assert "series" in result_data
+    # Fetch decision detail via API — includes activities, metrics, and results
+    response = client.get(f"/api/decisions/{decision.id}")
+    assert response.status_code == 200
+    data = response.json()
+    assert "activities" in data
+    assert "metrics" in data
+    assert "results" in data
+    assert "series" in data
 
 
 def test_api_decision_rows_expose_sensitivity_scoring_fields(client, db):
