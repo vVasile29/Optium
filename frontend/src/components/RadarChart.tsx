@@ -1,3 +1,4 @@
+import { useState, useEffect } from "react";
 import {
   Chart as ChartJS,
   RadialLinearScale,
@@ -36,13 +37,44 @@ const COLORS = [
   { bg: "rgba(168, 85, 247, 0.2)", border: "rgb(168, 85, 247)" },
 ];
 
-/** Pick high-contrast colours based on whether the page has the .dark class.
- *  Using explicit strings instead of CSS variables because getComputedStyle
- *  results are unreliable inside a <canvas> context. */
-function themeColors() {
-  const dark =
-    typeof document !== "undefined" &&
-    document.documentElement.classList.contains("dark");
+/** Reactive hook: returns true when dark mode is active, tracking both
+ *  the .dark class on <html> and the prefers-color-scheme media query. */
+function useIsDark(): boolean {
+  const [isDark, setIsDark] = useState(() => {
+    if (typeof document === "undefined") return false;
+    return (
+      document.documentElement.classList.contains("dark") ||
+      window.matchMedia("(prefers-color-scheme: dark)").matches
+    );
+  });
+
+  useEffect(() => {
+    const mq = window.matchMedia("(prefers-color-scheme: dark)");
+    const onMqChange = (e: MediaQueryListEvent) => setIsDark(e.matches);
+    mq.addEventListener("change", onMqChange);
+
+    const observer = new MutationObserver(() => {
+      setIsDark(
+        document.documentElement.classList.contains("dark") || mq.matches,
+      );
+    });
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["class"],
+    });
+
+    return () => {
+      mq.removeEventListener("change", onMqChange);
+      observer.disconnect();
+    };
+  }, []);
+
+  return isDark;
+}
+
+/** Return high-contrast theme colours based on the resolved dark-mode flag.
+ *  Using explicit hsl() strings so canvas rendering is reliable. */
+function themeColors(dark: boolean) {
   return {
     fg: dark ? "hsl(210, 40%, 98%)" : "hsl(222.2, 84%, 4.9%)",
     popover: dark ? "hsl(222.2, 84%, 4.9%)" : "hsl(0, 0%, 100%)",
@@ -53,7 +85,8 @@ function themeColors() {
 }
 
 export default function RadarChart({ labels, datasets }: RadarChartProps) {
-  const theme = themeColors();
+  const isDark = useIsDark();
+  const theme = themeColors(isDark);
 
   const data = {
     labels,
