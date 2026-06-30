@@ -11,7 +11,7 @@ Type a question like "should I buy a house or an apartment?", "rank Python, Java
 - **Universal criteria framework** — 6 value dimensions (Financial, Quality, Time, Risk, Experience, Convenience) with 12 curated metrics
 - **Interactive review** — see what the system parsed, add/remove alternatives, select criteria, adjust weights
 - **Weighted scoring** — per-(alternative, criterion) weights with 0–100 sliders
-- **Decision robustness** — Monte Carlo MCDA sensitivity analysis reports winner robustness and first-rank acceptability
+- **Decision robustness** — Monte Carlo MCDA sensitivity analysis reports winner retention and rank acceptability (Rank 1)
 - **Post-hoc threshold filtering** — apply must-have thresholds on the result page to see pass/fail alternatives and ranked survivors
 - **Radar chart** — visualize how alternatives compare across all criteria
 - **Zero signup** — no accounts required; development uses local SQLite storage
@@ -121,7 +121,7 @@ Decision mode routing is automatic:
 
 Optium uses a weighted additive MCDA model. Each alternative keeps its own criterion weights: `fit = Σ(score × weight) / Σ(weight) / 100`, with lower-is-better metrics inverted before aggregation.
 
-Result pages also compute server-side robustness with a local Monte Carlo sampler. Each simulation perturbs existing per-alternative weights by a relative uniform factor of 0.90–1.10 and scores by an absolute uniform delta of -5 to +5 points, clamps values to 0–100, recomputes rankings, and reports first-rank acceptability, winner-changed percentage, and a top-two advantage interval. This is stochastic MCDA sensitivity analysis, not a hypothesis test.
+Result pages also compute server-side robustness with a local Monte Carlo sampler. This is Monte Carlo sensitivity analysis on a weighted additive value model (WAVM), not hypothesis testing. Each simulation perturbs existing per-alternative weights uniformly by ±10%, clips weights to [0,100], renormalizes sampled weights back to that alternative's base total when base and sampled totals are positive, perturbs scores uniformly by ±5 points, clips scores to [0,100], and recomputes rankings. Reports use percentage-point units for the mean weighted score advantage and the 95% simulation interval, plus winner retained percent/count, winner-changed percentage, and rank acceptability (Rank 1).
 
 ## Project Structure
 

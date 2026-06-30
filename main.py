@@ -75,6 +75,7 @@ app.include_router(rank_router)
 def health():
     return {"status": "ok"}
 
+
 if __name__ == "__main__":
     import uvicorn
 
@@ -171,7 +172,9 @@ async def decide(request: Request, db: Session = Depends(get_db)):
 
         list_parsed = extract_list(query)
         if list_parsed["parsed"]:
-            enforce_decision_size(len(list_parsed["alternatives"]), len(UNIVERSAL_METRICS))
+            enforce_decision_size(
+                len(list_parsed["alternatives"]), len(UNIVERSAL_METRICS)
+            )
             # Route as RANK
             decision = Decision(query=query, category="General", mode="rank")
             db.add(decision)

@@ -13,6 +13,10 @@ WEIGHT_MIN_FACTOR = 0.9
 WEIGHT_MAX_FACTOR = 1.1
 SCORE_MIN_DELTA = -5.0
 SCORE_MAX_DELTA = 5.0
+METHOD_DESCRIPTION = (
+    "Monte Carlo sensitivity analysis on a weighted additive value model "
+    "(WAVM); not hypothesis testing."
+)
 
 
 def robustness_label(percent: float) -> str:
@@ -61,6 +65,52 @@ def _percentile(values: list[float], percentile: float) -> float:
     return ordered[lower] + (ordered[upper] - ordered[lower]) * fraction
 
 
+def _renormalize_weights(
+    sampled_weights: dict[int, float], base_weights: dict[int, float]
+) -> dict[int, float]:
+    base_total = sum(_clamp(float(weight)) for weight in base_weights.values())
+    clamped_weights = {
+        metric_id: _clamp(float(weight))
+        for metric_id, weight in sampled_weights.items()
+    }
+    sampled_total = sum(clamped_weights.values())
+    if base_total <= 0 or sampled_total <= 0:
+        return sampled_weights
+    if base_total >= len(clamped_weights) * 100.0:
+        return {metric_id: 100.0 for metric_id in clamped_weights}
+
+    renormalized = dict.fromkeys(clamped_weights, 0.0)
+    active_metric_ids = set(clamped_weights)
+    remaining_total = base_total
+
+    while active_metric_ids and remaining_total > 0:
+        active_total = sum(
+            clamped_weights[metric_id] for metric_id in active_metric_ids
+        )
+        if active_total <= 0:
+            share = remaining_total / len(active_metric_ids)
+            for metric_id in active_metric_ids:
+                renormalized[metric_id] = min(100.0, share)
+            break
+        scale = remaining_total / active_total
+        capped_metric_ids = {
+            metric_id
+            for metric_id in active_metric_ids
+            if clamped_weights[metric_id] * scale >= 100.0
+        }
+        if not capped_metric_ids:
+            for metric_id in active_metric_ids:
+                renormalized[metric_id] = clamped_weights[metric_id] * scale
+            remaining_total = 0.0
+            break
+        for metric_id in capped_metric_ids:
+            renormalized[metric_id] = 100.0
+        remaining_total -= len(capped_metric_ids) * 100.0
+        active_metric_ids -= capped_metric_ids
+
+    return {metric_id: _clamp(weight) for metric_id, weight in renormalized.items()}
+
+
 def build_decision_robustness(
     decision_id: int,
     db: Session,
@@ -71,7 +121,9 @@ def build_decision_robustness(
 ) -> dict | None:
     simulations = max(MIN_SIMULATIONS, min(MAX_SIMULATIONS, int(simulations)))
     query = (
-        db.query(Activity).filter(Activity.decision_id == decision_id).order_by(Activity.id)
+        db.query(Activity)
+        .filter(Activity.decision_id == decision_id)
+        .order_by(Activity.id)
     )
     if activity_ids is not None:
         if not activity_ids:
@@ -132,12 +184,14 @@ def build_decision_robustness(
             simulations=simulations,
             seed=seed,
             winner=base_winner,
+            winner_retained_count=simulations,
             winner_robustness_percent=100.0,
             winner_changed_percent=0.0,
             rank_acceptability=[
                 {
                     "activity_id": base_winner.id,
                     "activity_name": base_winner.name,
+                    "first_rank_count": simulations,
                     "first_rank_percent": 100.0,
                 }
             ],
@@ -153,12 +207,14 @@ def build_decision_robustness(
     for _ in range(simulations):
         simulated_scores = {}
         for activity in activities:
+            base_weights = weights_by_activity.get(activity.id, {})
             sampled_weights = {
                 metric_id: _clamp(
                     float(weight) * rng.uniform(WEIGHT_MIN_FACTOR, WEIGHT_MAX_FACTOR)
                 )
-                for metric_id, weight in weights_by_activity.get(activity.id, {}).items()
+                for metric_id, weight in base_weights.items()
             }
+            sampled_weights = _renormalize_weights(sampled_weights, base_weights)
             sampled_scores = {
                 metric_id: _clamp(
                     float(score) + rng.uniform(SCORE_MIN_DELTA, SCORE_MAX_DELTA)
@@ -192,6 +248,7 @@ def build_decision_robustness(
         {
             "activity_id": activity.id,
             "activity_name": activity.name,
+            "first_rank_count": first_rank_counts[activity.id],
             "first_rank_percent": round(
                 first_rank_counts[activity.id] / simulations * 100, 2
             ),
@@ -207,9 +264,17 @@ def build_decision_robustness(
         "winner_id": base_winner.id,
         "runner_up_id": runner_up.id,
         "mean_difference": round(sum(differences) / len(differences), 4),
+        "mean_difference_percentage_points": round(
+            sum(differences) / len(differences) * 100, 2
+        ),
         "interval_95": {
             "lower": round(_percentile(differences, 0.025), 4),
             "upper": round(_percentile(differences, 0.975), 4),
+            "method": "empirical_percentile",
+        },
+        "interval_95_percentage_points": {
+            "lower": round(_percentile(differences, 0.025) * 100, 2),
+            "upper": round(_percentile(differences, 0.975) * 100, 2),
             "method": "empirical_percentile",
         },
     }
@@ -217,6 +282,7 @@ def build_decision_robustness(
         simulations=simulations,
         seed=seed,
         winner=base_winner,
+        winner_retained_count=first_rank_counts[base_winner.id],
         winner_robustness_percent=winner_robustness,
         winner_changed_percent=round(winner_changed_count / simulations * 100, 2),
         rank_acceptability=rank_acceptability,
@@ -229,6 +295,7 @@ def _robustness_payload(
     simulations: int,
     seed: int | None,
     winner: Activity,
+    winner_retained_count: int,
     winner_robustness_percent: float,
     winner_changed_percent: float,
     rank_acceptability: list[dict],
@@ -236,6 +303,7 @@ def _robustness_payload(
 ) -> dict:
     return {
         "method": "weighted_additive_monte_carlo",
+        "method_description": METHOD_DESCRIPTION,
         "simulations": simulations,
         "seed": seed,
         "weight_perturbation": {
@@ -247,9 +315,19 @@ def _robustness_payload(
             "type": "absolute_uniform",
             "min_delta": SCORE_MIN_DELTA,
             "max_delta": SCORE_MAX_DELTA,
+            "clipped_to": [0, 100],
+        },
+        "weight_renormalization": {
+            "applied": True,
+            "scope": "per_alternative",
+            "target": "base_total_weight",
+            "when": "after perturbation and clipping when base and sampled totals are positive",
+            "zero_total_behavior": "no-op when base or sampled total is zero",
         },
         "winner_id": winner.id,
         "winner_name": winner.name,
+        "winner_retained_count": winner_retained_count,
+        "winner_retained_total": simulations,
         "winner_robustness_percent": round(winner_robustness_percent, 2),
         "winner_changed_percent": round(winner_changed_percent, 2),
         "robustness_label": robustness_label(winner_robustness_percent),

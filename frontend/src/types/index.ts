@@ -72,6 +72,7 @@ export interface ScoreRow {
 
 export interface RobustnessData {
   method: "weighted_additive_monte_carlo";
+  method_description: string;
   simulations: number;
   seed: number | null;
   weight_perturbation: {
@@ -83,22 +84,39 @@ export interface RobustnessData {
     type: "absolute_uniform";
     min_delta: number;
     max_delta: number;
+    clipped_to: [number, number];
+  };
+  weight_renormalization: {
+    applied: boolean;
+    scope: string;
+    target: string;
+    when: string;
+    zero_total_behavior: string;
   };
   winner_id: number;
   winner_name: string;
+  winner_retained_count: number;
+  winner_retained_total: number;
   winner_robustness_percent: number;
   winner_changed_percent: number;
   robustness_label: string;
   rank_acceptability: Array<{
     activity_id: number;
     activity_name: string;
+    first_rank_count: number;
     first_rank_percent: number;
   }>;
   top_two: {
     winner_id: number;
     runner_up_id: number;
     mean_difference: number;
+    mean_difference_percentage_points: number;
     interval_95: {
+      lower: number;
+      upper: number;
+      method: "empirical_percentile";
+    };
+    interval_95_percentage_points: {
       lower: number;
       upper: number;
       method: "empirical_percentile";

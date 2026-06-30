@@ -183,9 +183,13 @@ def generate_markdown_brief(data: dict) -> str:
             [
                 "",
                 "## Decision Robustness",
-                "Stochastic MCDA sensitivity analysis perturbs each alternative's weights and scores, then recomputes weighted additive rankings.",
+                robustness.get(
+                    "method_description",
+                    "Monte Carlo sensitivity analysis on a weighted additive value model (WAVM); not hypothesis testing.",
+                ),
+                "Sensitivity model: weights uniform ±10%, scores uniform ±5 points, values clipped [0,100], and sampled weights renormalized to each alternative's base total when possible.",
                 f"- Winner: {robustness['winner_name']}",
-                f"- Robustness: {robustness['winner_robustness_percent']}% ({robustness['robustness_label']})",
+                f"- Winner retained: {robustness['winner_robustness_percent']}% ({robustness.get('winner_retained_count', 0)} / {robustness.get('winner_retained_total', robustness['simulations'])} simulations; {robustness['robustness_label']})",
                 f"- Winner changed: {robustness['winner_changed_percent']}% of simulations",
                 f"- Simulations: {robustness['simulations']}",
             ]
@@ -194,15 +198,13 @@ def generate_markdown_brief(data: dict) -> str:
             interval = top_two["interval_95"]
             lines.extend(
                 [
-                    f"- Mean top-two advantage: {top_two['mean_difference']}",
-                    f"- 95% interval: {interval['lower']} to {interval['upper']}",
+                    f"- Mean weighted score advantage: {top_two.get('mean_difference_percentage_points', top_two['mean_difference'] * 100)} percentage points",
+                    f"- 95% simulation interval: {top_two.get('interval_95_percentage_points', interval)['lower']} to {top_two.get('interval_95_percentage_points', interval)['upper']} percentage points",
                 ]
             )
-        lines.append("- First-rank acceptability:")
+        lines.append("- Rank acceptability (Rank 1):")
         for item in robustness.get("rank_acceptability", []):
-            lines.append(
-                f"  - {item['activity_name']}: {item['first_rank_percent']}%"
-            )
+            lines.append(f"  - {item['activity_name']}: {item['first_rank_percent']}%")
 
     lines.extend(
         [

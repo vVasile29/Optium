@@ -46,7 +46,9 @@ def _review_url(decision: Decision) -> str:
     }.get(mode, f"/decisions/{decision.id}/review")
 
 
-def _robustness_for_results(decision_id: int, db: Session, results: list) -> dict | None:
+def _robustness_for_results(
+    decision_id: int, db: Session, results: list
+) -> dict | None:
     activity_ids = [result["activity_id"] for result in results]
     return build_decision_robustness(decision_id, db, activity_ids=activity_ids)
 
@@ -309,7 +311,9 @@ def decide(body: dict, db: Session = Depends(get_db)):
         # If DIAGNOSE didn't match, try RANK
         list_parsed = extract_list(query)
         if list_parsed["parsed"]:
-            enforce_decision_size(len(list_parsed["alternatives"]), len(UNIVERSAL_METRICS))
+            enforce_decision_size(
+                len(list_parsed["alternatives"]), len(UNIVERSAL_METRICS)
+            )
             decision = Decision(query=query, category="General", mode="rank")
             db.add(decision)
             db.flush()

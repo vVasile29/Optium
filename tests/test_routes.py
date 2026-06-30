@@ -766,6 +766,7 @@ def test_evaluate_result_returns_single_option_robustness(client, db):
         {
             "activity_id": decision.activities[0].id,
             "activity_name": "Solo",
+            "first_rank_count": robustness["simulations"],
             "first_rank_percent": 100.0,
         }
     ]
@@ -1463,7 +1464,7 @@ def _seed_scored_decision(db, mode="choose"):
 
 def test_export_markdown_endpoint(client, db):
     """Export markdown works via consolidated /api endpoint.
-    
+
     For scored decisions, the brief includes MCDA robustness analysis.
     """
     choose = _seed_scored_decision(db, "choose")
@@ -1476,6 +1477,15 @@ def test_export_markdown_endpoint(client, db):
     assert "attachment" in resp.headers["content-disposition"]
     assert "Decision Brief" in resp.text
     assert "Decision Robustness" in resp.text
+    assert (
+        "Monte Carlo sensitivity analysis on a weighted additive value model (WAVM)"
+        in resp.text
+    )
+    assert "not hypothesis testing" in resp.text
+    assert "Rank acceptability (Rank 1)" in resp.text
+    assert "95% simulation interval" in resp.text
+    assert "percentage points" in resp.text
+    assert "confidence interval" not in resp.text.lower()
     assert "p-value" not in resp.text
     assert "t-statistic" not in resp.text
 
@@ -1486,6 +1496,8 @@ def test_export_markdown_endpoint(client, db):
     assert "attachment" in resp.headers["content-disposition"]
     assert "Decision Brief" in resp.text
     assert "Decision Robustness" in resp.text
+    assert "Rank acceptability (Rank 1)" in resp.text
+    assert "confidence interval" not in resp.text.lower()
     assert "p-value" not in resp.text
 
     # ── non-existent decision ──
@@ -1499,7 +1511,13 @@ def test_result_pages_include_robustness_and_null_compatibility_key(client, db):
     assert response.status_code == 200
     data = response.json()
     assert data["robustness"]["method"] == "weighted_additive_monte_carlo"
+    assert "method_description" in data["robustness"]
+    assert data["robustness"]["weight_renormalization"]["applied"] is True
+    assert (
+        data["robustness"]["winner_retained_total"] == data["robustness"]["simulations"]
+    )
     assert data["significance"] is None
+    assert "confidence interval" not in str(data).lower()
     assert "p_value" not in str(data)
     assert "t_statistic" not in str(data)
 

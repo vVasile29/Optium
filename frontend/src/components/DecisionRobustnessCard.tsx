@@ -28,32 +28,37 @@ export default function DecisionRobustnessCard({
         </div>
         <p className="text-sm text-muted-foreground">
           {robustness.winner_name} ranked first in{" "}
-          {robustness.winner_robustness_percent}% of {robustness.simulations}{" "}
-          weighted additive simulations.
+          {robustness.winner_robustness_percent}% (
+          {robustness.winner_retained_count} / {robustness.winner_retained_total}{" "}
+          simulations).
+        </p>
+        <p className="text-xs text-muted-foreground">
+          Method: {robustness.method_description}
         </p>
         <div className="grid grid-cols-2 gap-2 text-xs text-muted-foreground">
           <span>Winner changed: {robustness.winner_changed_percent}%</span>
-          <span>
-            Weights: {robustness.weight_perturbation.min_factor}×–
-            {robustness.weight_perturbation.max_factor}×
-          </span>
-          <span>
-            Scores: {robustness.score_perturbation.min_delta} to +
-            {robustness.score_perturbation.max_delta} points
-          </span>
+          <span>Weights: uniform ±10%, renormalized per alternative</span>
+          <span>Scores: uniform ±5 points, clipped [0,100]</span>
           {topTwo && (
             <span>
-              Mean top-two advantage: {topTwo.mean_difference}
+              Mean weighted score advantage:{" "}
+              {topTwo.mean_difference_percentage_points} percentage points
             </span>
           )}
           {topTwo && (
             <span>
-              Top-two interval: {topTwo.interval_95.lower} to {topTwo.interval_95.upper}
+              95% simulation interval: {topTwo.interval_95_percentage_points.lower} to{" "}
+              {topTwo.interval_95_percentage_points.upper} percentage points
             </span>
           )}
         </div>
+        <p className="text-xs text-muted-foreground">
+          Sensitivity model: weights are sampled uniformly ±10%, scores uniformly ±5
+          points, values are clipped to [0,100], and sampled weights are
+          renormalized to each alternative&apos;s base total when possible.
+        </p>
         <div className="space-y-1 text-xs">
-          <div className="font-medium">First-rank acceptability</div>
+          <div className="font-medium">Rank acceptability (Rank 1)</div>
           {robustness.rank_acceptability.map((item) => (
             <div key={item.activity_id} className="flex justify-between gap-3">
               <span className="truncate">{item.activity_name}</span>
