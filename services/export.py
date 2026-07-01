@@ -109,7 +109,6 @@ def get_decision_export_data(decision_id: int, db: Session) -> dict | None:
             db,
             activity_ids=[result["activity_id"] for result in result_basis],
         ),
-        "significance": None,
         "rows": rows,
         "thresholds": thresholds,
         "filter_result": filter_result,

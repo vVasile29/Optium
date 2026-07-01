@@ -36,7 +36,6 @@ export default function Layout({ children }: LayoutProps) {
   const navLinks = [
     { href: "/", label: "Home" },
     { href: "/decisions", label: "Decisions" },
-    { href: "/metrics", label: "Metrics" },
   ];
 
   return (

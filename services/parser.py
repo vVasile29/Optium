@@ -134,6 +134,9 @@ def extract_list(query: str) -> dict:
     return {"alternatives": [], "parsed": False}
 
 
+# NOTE: This function and extract_thresholds_detailed() are legacy/test utilities.
+# They are NOT called from the runtime API flow. The runtime uses
+# services.scoring.filter_by_thresholds() instead. Kept for test compatibility.
 def extract_thresholds(query: str) -> list[dict]:
     """Detects per-criterion threshold constraints from free text. (Backward-compatible)
 

@@ -436,7 +436,7 @@ def test_evaluate_result_returns_single_option_robustness(client, db):
             "first_rank_percent": 100.0,
         }
     ]
-    assert data["significance"] is None
+
 
 
 def test_decide_routes_to_diagnose(client, db):
@@ -1170,7 +1170,7 @@ def test_export_markdown_endpoint(client, db):
     assert resp.status_code == 404
 
 
-def test_result_pages_include_robustness_and_null_compatibility_key(client, db):
+def test_result_pages_include_robustness(client, db):
     decision = _seed_scored_decision(db, "choose")
     response = client.get(f"/api/decisions/{decision.id}")
     assert response.status_code == 200
@@ -1181,7 +1181,6 @@ def test_result_pages_include_robustness_and_null_compatibility_key(client, db):
     assert (
         data["robustness"]["winner_retained_total"] == data["robustness"]["simulations"]
     )
-    assert data["significance"] is None
     assert "confidence interval" not in str(data).lower()
     assert "p_value" not in str(data)
     assert "t_statistic" not in str(data)

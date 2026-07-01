@@ -111,7 +111,6 @@ def _build_decision_detail(decision_id: int, db: Session) -> dict:
         "metric_names": [],
         "rows": [],
         "robustness": None,
-        "significance": None,
         "dimension_scores": None,
         "gap_analysis": None,
         "filter_result": None,
@@ -192,7 +191,6 @@ def _build_decision_detail(decision_id: int, db: Session) -> dict:
         result["gap_analysis"] = gap_analysis(dim_scores) if dim_scores else None
 
     result["robustness"] = _robustness_for_results(decision_id, db, results)
-    result["significance"] = None
 
     # Threshold filtering
     thresholds = _parse_thresholds(decision, db)
@@ -565,7 +563,6 @@ def score_decision(
         "series": series,
         "metric_names": metric_names,
         "robustness": robustness,
-        "significance": None,
     }
 
 

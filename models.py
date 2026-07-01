@@ -72,6 +72,8 @@ class Metric(Base):
     name = Column(String, index=True, nullable=False)
     category = Column(String, nullable=False)
     description = Column(String, nullable=True)
+    # Compatibility field — all scores are now benefit-oriented (higher is always better).
+    # Scoring no longer inverts based on this field. Kept for schema/API compatibility.
     higher_is_better = Column(Boolean, default=True, nullable=False)
 
     __table_args__ = (UniqueConstraint("name", name="uq_metric_name"),)

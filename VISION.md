@@ -105,8 +105,6 @@ Question Input
 - 6 value dimensions and 12 global metrics
 - Weighted-sum scoring
 - `Decision`, `Activity`, `DecisionWeight`, `AlternativeScore` models
-- Metric manager CRUD
-- Radar chart presentation
 - Chart.js radar chart presentation
 - User-controlled criteria, weights, and scores
 
@@ -134,7 +132,6 @@ public modes.
 - Weighted scoring and radar chart results
 - Saved decisions
 - Post-hoc threshold filtering on result pages
-- Legacy screen/rank/evaluate routes for compatibility
 
 ### Near Term
 

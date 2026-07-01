@@ -121,8 +121,8 @@ export default function Review() {
       .map((a) => a.trim())
       .filter((a) => a.length > 0);
 
-    if (validAlternatives.length < 2) {
-      errors.push("At least two alternatives are required.");
+    if (validAlternatives.length < 1) {
+      errors.push("At least one alternative is required.");
     }
 
     const selectedMetrics = Object.entries(includedMetrics)

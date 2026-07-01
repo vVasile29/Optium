@@ -179,7 +179,6 @@ export interface DecisionDetail {
   metric_names: string[];
   rows: ScoreRow[];
   robustness: RobustnessData | null;
-  significance: null;
   dimension_scores: DimensionScore[] | null;
   gap_analysis: GapAnalysis | null;
   filter_result: FilterResult | null;
@@ -240,7 +239,6 @@ export interface ScoreResponse {
   series: SeriesData[];
   metric_names: string[];
   robustness: RobustnessData | null;
-  significance: null;
 }
 
 export interface ThresholdsPayload {
