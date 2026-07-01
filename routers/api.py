@@ -18,8 +18,10 @@ from services.robustness import build_decision_robustness
 from services.scoring import (
     compute_alternative_fit_scores,
     compute_dimension_scores,
+    evaluate_ko_criteria,
     filter_by_thresholds,
     gap_analysis,
+    sanitize_persisted_ko_criteria,
     sanitize_persisted_thresholds,
 )
 
@@ -39,6 +41,11 @@ def _robustness_for_results(
 def _parse_thresholds(decision: Decision, db: Session) -> list:
     # DB-safety layer for malformed persisted thresholds or manual edits.
     return sanitize_persisted_thresholds(decision.id, db)
+
+
+def _parse_ko_criteria(decision: Decision, db: Session) -> list:
+    # DB-safety layer for malformed persisted KO criteria or manual edits.
+    return sanitize_persisted_ko_criteria(decision.id, db)
 
 
 def _validate_metric_id(value, selected_metric_ids: set[int], label: str) -> int:
@@ -114,6 +121,8 @@ def _build_decision_detail(decision_id: int, db: Session) -> dict:
         "filter_result": None,
         "threshold_criteria": [],
         "thresholds": [],
+        "ko_criteria": [],
+        "ko_result": None,
     }
 
     if not activities or not metrics:
@@ -188,6 +197,39 @@ def _build_decision_detail(decision_id: int, db: Session) -> dict:
         result["gap_analysis"] = gap_analysis(dim_scores) if dim_scores else None
 
     result["robustness"] = _robustness_for_results(decision_id, db, results)
+
+    # Evaluate KO criteria
+    ko_criteria_raw = _parse_ko_criteria(decision, db)
+    result["ko_criteria"] = ko_criteria_raw
+
+    if ko_criteria_raw:
+        ko_result = evaluate_ko_criteria(decision_id, db)
+        result["ko_result"] = ko_result
+        if ko_result and ko_result["eligible_activity_ids"]:
+            eligible_set = set(ko_result["eligible_activity_ids"])
+            result["results"] = [
+                r for r in result["results"] if r["activity_id"] in eligible_set
+            ]
+            # Rebuild series for eligible only
+            eligible_names = {
+                a["activity_name"]
+                for a in ko_result["results"]
+                if a["status"] == "passed"
+            }
+            result["series"] = [
+                s for s in result["series"] if s["name"] in eligible_names
+            ]
+            # Robustness on eligible only
+            result["robustness"] = _robustness_for_results(
+                decision_id, db, result["results"]
+            )
+        elif ko_result:
+            # All knocked out
+            result["results"] = []
+            result["series"] = []
+            result["robustness"] = None
+    else:
+        result["ko_result"] = None
 
     # Threshold filtering
     thresholds = _parse_thresholds(decision, db)
@@ -377,6 +419,7 @@ def refine_decision(
 
     alternatives: list[str] = body.get("alternatives", [])
     metrics_input: list[dict] = body.get("metrics", [])
+    ko_criteria_input = body.get("ko_criteria")
 
     if not alternatives:
         raise HTTPException(
@@ -412,6 +455,90 @@ def refine_decision(
             weight=mitem.get("weight", 50),
         )
         db.add(dw)
+    db.flush()
+
+    # ── KO criteria validation & storage ──
+    selected_metric_ids = {m["metric_id"] for m in metrics_input}
+    valid_ko_operators = {"<=", ">=", "<", ">"}
+
+    if ko_criteria_input is not None:
+        if not isinstance(ko_criteria_input, list):
+            raise HTTPException(
+                status_code=422,
+                detail="ko_criteria must be a list",
+            )
+
+        validated_ko = []
+        for kc in ko_criteria_input:
+            if not isinstance(kc, dict):
+                raise HTTPException(
+                    status_code=422, detail="Each KO criterion must be an object"
+                )
+
+            metric_id = kc.get("metric_id")
+            if not isinstance(metric_id, int) or isinstance(metric_id, bool):
+                raise HTTPException(
+                    status_code=422, detail="KO criterion metric_id must be an integer"
+                )
+            if metric_id not in selected_metric_ids:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"KO criterion metric {metric_id} is not selected for this decision",
+                )
+
+            ko_operator = kc.get("ko_operator")
+            ko_value = kc.get("ko_value")
+
+            has_op = ko_operator is not None
+            has_val = ko_value is not None
+
+            if has_op != has_val:
+                raise HTTPException(
+                    status_code=422,
+                    detail="ko_operator and ko_value must both be present or both absent",
+                )
+
+            if not has_op and not has_val:
+                continue
+
+            if not isinstance(ko_operator, str):
+                raise HTTPException(
+                    status_code=422,
+                    detail="KO criterion ko_operator must be a string",
+                )
+            if ko_operator not in valid_ko_operators:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Invalid KO operator '{ko_operator}'. Must be one of: {', '.join(sorted(valid_ko_operators))}",
+                )
+
+            try:
+                ko_value_float = float(ko_value)
+            except (TypeError, ValueError):
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Invalid KO value '{ko_value}'",
+                )
+            if not math.isfinite(ko_value_float):
+                raise HTTPException(
+                    status_code=422, detail="KO value must be finite"
+                )
+            if ko_value_float < 0.0 or ko_value_float > 100.0:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"KO value {ko_value_float} is outside the 0–100 scale",
+                )
+
+            validated_ko.append(
+                {
+                    "metric_id": metric_id,
+                    "ko_operator": ko_operator,
+                    "ko_value": ko_value_float,
+                }
+            )
+
+        decision.ko_criteria = json.dumps(validated_ko) if validated_ko else None
+    # else: ko_criteria_input is None, leave existing KO criteria unchanged
 
     db.commit()
 
@@ -434,9 +561,18 @@ def refine_decision(
                 }
             )
 
+    # Read back stored KO criteria for response
+    stored_ko = []
+    if decision.ko_criteria:
+        try:
+            stored_ko = json.loads(decision.ko_criteria)
+        except (json.JSONDecodeError, TypeError):
+            stored_ko = []
+
     return {
         "activities": [{"id": a.id, "name": a.name} for a in new_activities],
         "criteria": criteria_result,
+        "ko_criteria": stored_ko,
     }
 
 

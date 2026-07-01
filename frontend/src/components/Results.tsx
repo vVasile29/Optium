@@ -17,7 +17,7 @@ import RadarChart from "@/components/RadarChart";
 import DecisionRobustnessCard from "@/components/DecisionRobustnessCard";
 import ThresholdPanel from "@/components/ThresholdPanel";
 import ExportButton from "@/components/ExportButton";
-import type { FitResult } from "@/types";
+import type { FitResult, KoResult } from "@/types";
 import { filterResultsToSurvivors, recomputeFitScores } from "@/lib/scoring";
 
 const RANK_META = [
@@ -246,6 +246,68 @@ export default function Results() {
           );
         })}
       </section>
+
+      {/* ── KO Criteria Card ── */}
+      {data.ko_result && data.ko_criteria.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-xl">Knock-Out Criteria</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="flex flex-wrap gap-2">
+              {data.ko_criteria.map((kc) => {
+                const metric = data.metrics.find(
+                  (m) => m.id === kc.metric_id,
+                );
+                const opDisplay =
+                  kc.ko_operator === ">="
+                    ? "≥"
+                    : kc.ko_operator === "<="
+                      ? "≤"
+                      : kc.ko_operator === ">"
+                        ? ">"
+                        : "<";
+                return (
+                  <Badge key={kc.metric_id} variant="outline" className="text-xs">
+                    {metric?.name ?? `Metric ${kc.metric_id}`} {opDisplay}{" "}
+                    {kc.ko_value}
+                  </Badge>
+                );
+              })}
+            </div>
+            {data.ko_result.results.map((entry) => (
+              <div
+                key={entry.activity_id}
+                className="flex items-center gap-2"
+              >
+                {entry.status === "passed" ? (
+                  <Badge
+                    variant="default"
+                    className="bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400"
+                  >
+                    PASSED
+                  </Badge>
+                ) : (
+                  <Badge variant="destructive">KNOCKED OUT</Badge>
+                )}
+                <span className="text-sm font-medium">
+                  {entry.activity_name}
+                </span>
+                {entry.reasons.length > 0 && (
+                  <span className="text-xs text-muted-foreground">
+                    — {entry.reasons.join("; ")}
+                  </span>
+                )}
+              </div>
+            ))}
+            {data.ko_result.all_passed && (
+              <p className="text-sm text-muted-foreground">
+                All alternatives passed knock-out criteria.
+              </p>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       {/* ── Threshold Panel (only for multi-alternative) ── */}
       {!isSingle && (

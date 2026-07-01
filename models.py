@@ -24,6 +24,9 @@ class Decision(Base):
     thresholds = Column(
         String, nullable=True
     )  # JSON string: [{"metric_id": 1, "operator": ">=", "value": 60}]
+    ko_criteria = Column(
+        String, nullable=True
+    )  # JSON string: [{"metric_id": 1, "ko_operator": "<=", "ko_value": 50}]
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     activities = relationship(

@@ -10,7 +10,7 @@ import { Slider } from "@/components/ui/slider";
 import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Loader2, ArrowRight, Plus, X } from "lucide-react";
-import type { Metric } from "@/types";
+import type { KoCriterion, Metric } from "@/types";
 
 const DIMENSION_ORDER = [
   "Financial",
@@ -36,6 +36,7 @@ export default function Review() {
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [validationErrors, setValidationErrors] = useState<string[]>([]);
+  const [koCriteria, setKoCriteria] = useState<Record<number, { enabled: boolean; operator: string; value: number }>>({});
 
   // Initialize state from fetched decision data
   useEffect(() => {
@@ -60,6 +61,20 @@ export default function Review() {
 
     setIncludedMetrics(included);
     setMetricWeights(weights);
+
+    // Initialize KO criteria from existing data
+    const koInit: Record<number, { enabled: boolean; operator: string; value: number }> = {};
+    if (data.ko_criteria) {
+      data.ko_criteria.forEach((kc) => {
+        koInit[kc.metric_id] = { enabled: true, operator: kc.ko_operator, value: kc.ko_value };
+      });
+    }
+    data.metrics.forEach((m) => {
+      if (!koInit[m.id]) {
+        koInit[m.id] = { enabled: false, operator: ">=", value: 50 };
+      }
+    });
+    setKoCriteria(koInit);
   }, [data]);
 
   // Group metrics by dimension category, sorted in ontology order
@@ -148,9 +163,19 @@ export default function Review() {
         weight: metricWeights[metricId] ?? 50,
       }));
 
+      // Build KO criteria payload
+      const koPayload = Object.entries(koCriteria)
+        .filter(([, kc]) => kc.enabled)
+        .map(([metricIdStr, kc]) => ({
+          metric_id: parseInt(metricIdStr),
+          ko_operator: kc.operator,
+          ko_value: kc.value,
+        }));
+
       await api.refineDecision(numId, {
         alternatives: validAlternatives,
         metrics: metricsPayload,
+        ko_criteria: koPayload.length > 0 ? koPayload : undefined,
       });
 
       navigate(`/decisions/${numId}/score`);
@@ -297,6 +322,106 @@ export default function Review() {
 
                   </div>
                 ))}
+              </div>
+            </div>
+          ))}
+        </CardContent>
+      </Card>
+
+      {/* ── Knock-Out Criteria Section ── */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-xl">Knock-Out Criteria</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <p className="text-sm text-muted-foreground">
+            Set minimum/maximum thresholds that eliminate alternatives. An
+            alternative failing any KO criterion is removed from results.
+          </p>
+          {groupedMetrics.map(({ dimension, metrics }) => (
+            <div key={dimension}>
+              <h3 className="font-semibold text-sm text-muted-foreground uppercase tracking-wider mb-3">
+                {dimension}
+              </h3>
+              <div className="space-y-3">
+                {metrics
+                  .filter((m) => includedMetrics[m.id])
+                  .map((metric) => {
+                    const kc = koCriteria[metric.id] || {
+                      enabled: false,
+                      operator: ">=",
+                      value: 50,
+                    };
+                    return (
+                      <div
+                        key={metric.id}
+                        className="flex flex-col sm:flex-row sm:items-center gap-3"
+                      >
+                        <div className="flex items-center gap-2 sm:w-48 shrink-0">
+                          <Checkbox
+                            id={`ko-${metric.id}`}
+                            checked={kc.enabled}
+                            onCheckedChange={(checked) =>
+                              setKoCriteria((prev) => ({
+                                ...prev,
+                                [metric.id]: {
+                                  ...prev[metric.id],
+                                  enabled: !!checked,
+                                },
+                              }))
+                            }
+                          />
+                          <Label
+                            htmlFor={`ko-${metric.id}`}
+                            className="font-medium cursor-pointer text-sm"
+                          >
+                            {metric.name}
+                          </Label>
+                        </div>
+                        {kc.enabled && (
+                          <div className="flex items-center gap-2 flex-1">
+                            <select
+                              className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+                              value={kc.operator}
+                              onChange={(e) =>
+                                setKoCriteria((prev) => ({
+                                  ...prev,
+                                  [metric.id]: {
+                                    ...prev[metric.id],
+                                    operator: e.target.value,
+                                  },
+                                }))
+                              }
+                            >
+                              <option value=">=">≥</option>
+                              <option value="<=">≤</option>
+                              <option value=">">&gt;</option>
+                              <option value="<">&lt;</option>
+                            </select>
+                            <Input
+                              type="number"
+                              min={0}
+                              max={100}
+                              value={kc.value}
+                              onChange={(e) =>
+                                setKoCriteria((prev) => ({
+                                  ...prev,
+                                  [metric.id]: {
+                                    ...prev[metric.id],
+                                    value: Number(e.target.value),
+                                  },
+                                }))
+                              }
+                              className="w-20"
+                            />
+                            <span className="text-xs text-muted-foreground">
+                              0–100
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
               </div>
             </div>
           ))}

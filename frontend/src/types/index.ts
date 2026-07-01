@@ -166,6 +166,27 @@ export interface GapAnalysis {
 
 // ── Composite Decision Detail (full response from GET /api/decisions/{id}) ──
 
+// ── KO (Knock-Out) Criteria ──
+
+export interface KoCriterion {
+  metric_id: number;
+  ko_operator: string;
+  ko_value: number;
+}
+
+export interface KoResultEntry {
+  activity_id: number;
+  activity_name: string;
+  status: "passed" | "knocked_out";
+  reasons: string[];
+}
+
+export interface KoResult {
+  results: KoResultEntry[];
+  all_passed: boolean;
+  eligible_activity_ids: number[];
+}
+
 export interface DecisionDetail {
   decision: Decision;
   activities: Activity[];
@@ -180,6 +201,8 @@ export interface DecisionDetail {
   filter_result: FilterResult | null;
   threshold_criteria: ThresholdCriterion[];
   thresholds: ThresholdEntry[];
+  ko_criteria: KoCriterion[];
+  ko_result: KoResult | null;
 }
 
 // ── Metrics endpoint ──
@@ -208,6 +231,7 @@ export interface RefinePayload {
     metric_id: number;
     weight?: number;
   }>;
+  ko_criteria?: KoCriterion[];
 }
 
 export interface RefineResponse {

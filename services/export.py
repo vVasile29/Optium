@@ -4,7 +4,9 @@ from models import Activity, DecisionWeight, AlternativeScore, Decision, Metric
 from services.robustness import build_decision_robustness
 from services.scoring import (
     compute_alternative_fit_scores,
+    evaluate_ko_criteria,
     filter_by_thresholds,
+    sanitize_persisted_ko_criteria,
     sanitize_persisted_thresholds,
 )
 
@@ -83,6 +85,9 @@ def get_decision_export_data(decision_id: int, db: Session) -> dict | None:
         for activity in activities
     ]
 
+    ko_criteria = sanitize_persisted_ko_criteria(decision_id, db)
+    ko_result = evaluate_ko_criteria(decision_id, db) if ko_criteria else None
+
     return {
         "decision": {
             "id": decision.id,
@@ -110,6 +115,8 @@ def get_decision_export_data(decision_id: int, db: Session) -> dict | None:
         "rows": rows,
         "thresholds": thresholds,
         "filter_result": filter_result,
+        "ko_criteria": ko_criteria,
+        "ko_result": ko_result,
     }
 
 
@@ -131,6 +138,33 @@ def generate_markdown_brief(data: dict) -> str:
             lines.append(f"{idx}. {result['activity_name']} — {result['fit_pct']}%")
     else:
         lines.append("No scored results yet.")
+
+    # ── Knock-Out Criteria section ──
+    if data.get("ko_criteria"):
+        metric_names = {m["id"]: m["name"] for m in data["metrics"]}
+        lines.extend(["", "## Knock-Out Criteria"])
+        for kc in data["ko_criteria"]:
+            metric_name = metric_names.get(kc.get("metric_id"), "Unknown metric")
+            lines.append(
+                f"- {metric_name} {kc.get('ko_operator', '>=')} {kc.get('ko_value')}"
+            )
+
+    # ── Knock-Out Results section ──
+    ko_result = data.get("ko_result")
+    if ko_result:
+        lines.extend(["", "## Knock-Out Results"])
+        all_passed = ko_result.get("all_passed", True)
+        if all_passed:
+            lines.append("- All alternatives passed knock-out criteria.")
+        else:
+            for entry in ko_result.get("results", []):
+                if entry["status"] == "passed":
+                    lines.append(f"- {entry['activity_name']}: PASSED")
+                else:
+                    reasons = "; ".join(entry.get("reasons", []))
+                    lines.append(
+                        f"- {entry['activity_name']}: KNOCKED OUT — {reasons}"
+                    )
 
     if data.get("thresholds"):
         lines.extend(["", "## Threshold Filters"])

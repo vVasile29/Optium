@@ -1252,6 +1252,392 @@ def test_slider_fill_markup_and_sensitivity_classes(client, db):
     assert "series" in data
 
 
+# ── KO (Knock-Out) criteria API tests ──
+
+
+class TestKoApi:
+    """Integration tests for KO criteria via the API."""
+
+    def test_refine_with_ko(self, client, db):
+        """Valid KO stored via refine, GET includes ko_criteria and ko_result."""
+        # Create decision
+        resp = client.post("/api/decide", json={"q": "A or B?"})
+        assert resp.status_code == 200
+        decision_id = resp.json()["decision_id"]
+
+        from models import Metric
+        metric = db.query(Metric).order_by(Metric.id).first()
+        assert metric is not None
+
+        # Refine with KO criteria
+        refine_resp = client.post(
+            f"/api/decisions/{decision_id}/refine",
+            json={
+                "alternatives": ["A", "B"],
+                "metrics": [{"metric_id": metric.id, "weight": 80}],
+                "ko_criteria": [
+                    {"metric_id": metric.id, "ko_operator": ">=", "ko_value": 50}
+                ],
+            },
+        )
+        assert refine_resp.status_code == 200
+        refine_data = refine_resp.json()
+        assert "ko_criteria" in refine_data
+        assert len(refine_data["ko_criteria"]) == 1
+        assert refine_data["ko_criteria"][0]["metric_id"] == metric.id
+        assert refine_data["ko_criteria"][0]["ko_operator"] == ">="
+        assert refine_data["ko_criteria"][0]["ko_value"] == 50
+
+        # GET includes ko_criteria and ko_result
+        detail_resp = client.get(f"/api/decisions/{decision_id}")
+        assert detail_resp.status_code == 200
+        detail = detail_resp.json()
+        assert "ko_criteria" in detail
+        assert len(detail["ko_criteria"]) == 1
+        assert "ko_result" in detail
+
+    def test_refine_ko_rejects_partial(self, client, db):
+        """operator without value -> 422."""
+        resp = client.post("/api/decide", json={"q": "X or Y?"})
+        decision_id = resp.json()["decision_id"]
+        from models import Metric
+        metric = db.query(Metric).order_by(Metric.id).first()
+
+        refine_resp = client.post(
+            f"/api/decisions/{decision_id}/refine",
+            json={
+                "alternatives": ["X", "Y"],
+                "metrics": [{"metric_id": metric.id, "weight": 80}],
+                "ko_criteria": [
+                    {"metric_id": metric.id, "ko_operator": ">="}
+                ],
+            },
+        )
+        assert refine_resp.status_code == 422
+
+    def test_refine_ko_rejects_bad_operator(self, client, db):
+        """Invalid operator -> 422."""
+        resp = client.post("/api/decide", json={"q": "X or Y?"})
+        decision_id = resp.json()["decision_id"]
+        from models import Metric
+        metric = db.query(Metric).order_by(Metric.id).first()
+
+        refine_resp = client.post(
+            f"/api/decisions/{decision_id}/refine",
+            json={
+                "alternatives": ["X", "Y"],
+                "metrics": [{"metric_id": metric.id, "weight": 80}],
+                "ko_criteria": [
+                    {"metric_id": metric.id, "ko_operator": "==", "ko_value": 50}
+                ],
+            },
+        )
+        assert refine_resp.status_code == 422
+
+    @pytest.mark.parametrize("bad_op", [[], {}])
+    def test_refine_ko_rejects_non_string_operator(self, client, db, bad_op):
+        """List/dict operator -> 422 (security)."""
+        resp = client.post("/api/decide", json={"q": "X or Y?"})
+        decision_id = resp.json()["decision_id"]
+        from models import Metric
+        metric = db.query(Metric).order_by(Metric.id).first()
+
+        refine_resp = client.post(
+            f"/api/decisions/{decision_id}/refine",
+            json={
+                "alternatives": ["X", "Y"],
+                "metrics": [{"metric_id": metric.id, "weight": 80}],
+                "ko_criteria": [
+                    {"metric_id": metric.id, "ko_operator": bad_op, "ko_value": 50}
+                ],
+            },
+        )
+        assert refine_resp.status_code == 422
+
+    def test_refine_ko_rejects_bad_value(self, client, db):
+        """Out-of-range value -> 422."""
+        resp = client.post("/api/decide", json={"q": "X or Y?"})
+        decision_id = resp.json()["decision_id"]
+        from models import Metric
+        metric = db.query(Metric).order_by(Metric.id).first()
+
+        refine_resp = client.post(
+            f"/api/decisions/{decision_id}/refine",
+            json={
+                "alternatives": ["X", "Y"],
+                "metrics": [{"metric_id": metric.id, "weight": 80}],
+                "ko_criteria": [
+                    {"metric_id": metric.id, "ko_operator": ">=", "ko_value": 150}
+                ],
+            },
+        )
+        assert refine_resp.status_code == 422
+
+    def test_refine_ko_rejects_unselected_metric(self, client, db):
+        """Metric not in decision -> 422."""
+        resp = client.post("/api/decide", json={"q": "X or Y?"})
+        decision_id = resp.json()["decision_id"]
+        from models import Metric
+        # Get a metric that won't be in the refine
+        metrics = db.query(Metric).order_by(Metric.id).all()
+        assert len(metrics) >= 2
+
+        refine_resp = client.post(
+            f"/api/decisions/{decision_id}/refine",
+            json={
+                "alternatives": ["X", "Y"],
+                "metrics": [{"metric_id": metrics[0].id, "weight": 80}],
+                "ko_criteria": [
+                    {"metric_id": metrics[1].id, "ko_operator": ">=", "ko_value": 50}
+                ],
+            },
+        )
+        assert refine_resp.status_code == 422
+
+    def test_ko_blocks_in_results(self, client, db):
+        """KO'd alt excluded from results/series/robustness."""
+        from models import Metric
+        metrics = db.query(Metric).order_by(Metric.id).all()
+        assert len(metrics) >= 1
+        m = metrics[0]
+
+        # Create decision via /decide
+        resp = client.post("/api/decide", json={"q": "Test decision"})
+        decision_id = resp.json()["decision_id"]
+
+        # Refine with 2 alternatives and KO criterion
+        refine_resp = client.post(
+            f"/api/decisions/{decision_id}/refine",
+            json={
+                "alternatives": ["Good", "Bad"],
+                "metrics": [{"metric_id": m.id, "weight": 80}],
+                "ko_criteria": [
+                    {"metric_id": m.id, "ko_operator": ">=", "ko_value": 60}
+                ],
+            },
+        )
+        assert refine_resp.status_code == 200
+        acts = refine_resp.json()["activities"]
+        good_id = next(a["id"] for a in acts if a["name"] == "Good")
+        bad_id = next(a["id"] for a in acts if a["name"] == "Bad")
+
+        # Score: Good passes (80), Bad fails (30)
+        score_resp = client.post(
+            f"/api/decisions/{decision_id}/score",
+            json={
+                "scores": [
+                    {"activity_id": good_id, "metric_id": m.id, "score": 80},
+                    {"activity_id": bad_id, "metric_id": m.id, "score": 30},
+                ]
+            },
+        )
+        assert score_resp.status_code == 200
+
+        # GET detail — KO'd alt should be excluded from results
+        detail = client.get(f"/api/decisions/{decision_id}").json()
+        assert len(detail["results"]) == 1
+        assert detail["results"][0]["activity_name"] == "Good"
+        assert len(detail["series"]) == 1
+        assert detail["series"][0]["name"] == "Good"
+        assert detail["ko_result"] is not None
+        assert detail["ko_result"]["all_passed"] is False
+        knocked = [r for r in detail["ko_result"]["results"] if r["status"] == "knocked_out"]
+        assert len(knocked) == 1
+        assert knocked[0]["activity_name"] == "Bad"
+
+    def test_ko_all_knocked_out_empty_results(self, client, db):
+        """All KO'd -> results=[], robustness=None."""
+        from models import Metric
+        m = db.query(Metric).order_by(Metric.id).first()
+
+        resp = client.post("/api/decide", json={"q": "Test"})
+        decision_id = resp.json()["decision_id"]
+
+        refine_resp = client.post(
+            f"/api/decisions/{decision_id}/refine",
+            json={
+                "alternatives": ["Fail1", "Fail2"],
+                "metrics": [{"metric_id": m.id, "weight": 80}],
+                "ko_criteria": [
+                    {"metric_id": m.id, "ko_operator": ">=", "ko_value": 60}
+                ],
+            },
+        )
+        assert refine_resp.status_code == 200
+        acts = refine_resp.json()["activities"]
+        fail1_id = acts[0]["id"]
+        fail2_id = acts[1]["id"]
+
+        score_resp = client.post(
+            f"/api/decisions/{decision_id}/score",
+            json={
+                "scores": [
+                    {"activity_id": fail1_id, "metric_id": m.id, "score": 30},
+                    {"activity_id": fail2_id, "metric_id": m.id, "score": 20},
+                ]
+            },
+        )
+        assert score_resp.status_code == 200
+
+        detail = client.get(f"/api/decisions/{decision_id}").json()
+        assert detail["results"] == []
+        assert detail["series"] == []
+        assert detail["robustness"] is None
+
+    def test_ko_with_scores(self, client, db):
+        """Scored alternatives evaluated correctly."""
+        from models import Metric
+        metrics = db.query(Metric).order_by(Metric.id).limit(2).all()
+        assert len(metrics) >= 2
+        m1, m2 = metrics[0], metrics[1]
+
+        resp = client.post("/api/decide", json={"q": "Test"})
+        decision_id = resp.json()["decision_id"]
+
+        refine_resp = client.post(
+            f"/api/decisions/{decision_id}/refine",
+            json={
+                "alternatives": ["High", "Low"],
+                "metrics": [
+                    {"metric_id": m1.id, "weight": 50},
+                    {"metric_id": m2.id, "weight": 50},
+                ],
+                "ko_criteria": [
+                    {"metric_id": m1.id, "ko_operator": ">=", "ko_value": 70},
+                ],
+            },
+        )
+        assert refine_resp.status_code == 200
+        acts = refine_resp.json()["activities"]
+        high_id = next(a["id"] for a in acts if a["name"] == "High")
+        low_id = next(a["id"] for a in acts if a["name"] == "Low")
+
+        score_resp = client.post(
+            f"/api/decisions/{decision_id}/score",
+            json={
+                "scores": [
+                    {"activity_id": high_id, "metric_id": m1.id, "score": 90},
+                    {"activity_id": high_id, "metric_id": m2.id, "score": 50},
+                    {"activity_id": low_id, "metric_id": m1.id, "score": 30},
+                    {"activity_id": low_id, "metric_id": m2.id, "score": 80},
+                ]
+            },
+        )
+        assert score_resp.status_code == 200
+
+        detail = client.get(f"/api/decisions/{decision_id}").json()
+        assert len(detail["results"]) == 1
+        assert detail["results"][0]["activity_name"] == "High"
+
+    def test_ko_missing_score(self, client, db):
+        """No score for KO metric -> knocked_out."""
+        from models import Metric
+        m = db.query(Metric).order_by(Metric.id).first()
+
+        resp = client.post("/api/decide", json={"q": "Test"})
+        decision_id = resp.json()["decision_id"]
+
+        refine_resp = client.post(
+            f"/api/decisions/{decision_id}/refine",
+            json={
+                "alternatives": ["NoScore"],
+                "metrics": [{"metric_id": m.id, "weight": 80}],
+                "ko_criteria": [
+                    {"metric_id": m.id, "ko_operator": ">=", "ko_value": 50}
+                ],
+            },
+        )
+        assert refine_resp.status_code == 200
+
+        # Don't submit any scores
+        detail = client.get(f"/api/decisions/{decision_id}").json()
+        assert detail["ko_result"] is not None
+        assert detail["ko_result"]["results"][0]["status"] == "knocked_out"
+        assert any("No score available" in r for r in detail["ko_result"]["results"][0]["reasons"])
+
+    def test_export_includes_ko(self, client, db):
+        """Markdown export includes KO section."""
+        from models import Metric
+        m = db.query(Metric).order_by(Metric.id).first()
+
+        resp = client.post("/api/decide", json={"q": "Test KO export"})
+        decision_id = resp.json()["decision_id"]
+
+        refine_resp = client.post(
+            f"/api/decisions/{decision_id}/refine",
+            json={
+                "alternatives": ["Pass", "Fail"],
+                "metrics": [{"metric_id": m.id, "weight": 80}],
+                "ko_criteria": [
+                    {"metric_id": m.id, "ko_operator": ">=", "ko_value": 60}
+                ],
+            },
+        )
+        assert refine_resp.status_code == 200
+        acts = refine_resp.json()["activities"]
+        pass_id = next(a["id"] for a in acts if a["name"] == "Pass")
+        fail_id = next(a["id"] for a in acts if a["name"] == "Fail")
+
+        client.post(
+            f"/api/decisions/{decision_id}/score",
+            json={
+                "scores": [
+                    {"activity_id": pass_id, "metric_id": m.id, "score": 80},
+                    {"activity_id": fail_id, "metric_id": m.id, "score": 30},
+                ]
+            },
+        )
+
+        export_resp = client.get(f"/api/decisions/{decision_id}/export-markdown")
+        assert export_resp.status_code == 200
+        text = export_resp.text
+        assert "## Knock-Out Criteria" in text
+        assert "## Knock-Out Results" in text
+        assert "PASSED" in text
+        assert "KNOCKED OUT" in text
+
+    def test_ko_robustness_only_eligible(self, client, db):
+        """Robustness only on passed alts."""
+        from models import Metric
+        m = db.query(Metric).order_by(Metric.id).first()
+
+        resp = client.post("/api/decide", json={"q": "Test"})
+        decision_id = resp.json()["decision_id"]
+
+        refine_resp = client.post(
+            f"/api/decisions/{decision_id}/refine",
+            json={
+                "alternatives": ["Pass", "Fail"],
+                "metrics": [{"metric_id": m.id, "weight": 80}],
+                "ko_criteria": [
+                    {"metric_id": m.id, "ko_operator": ">=", "ko_value": 60}
+                ],
+            },
+        )
+        assert refine_resp.status_code == 200
+        acts = refine_resp.json()["activities"]
+        pass_id = next(a["id"] for a in acts if a["name"] == "Pass")
+        fail_id = next(a["id"] for a in acts if a["name"] == "Fail")
+
+        client.post(
+            f"/api/decisions/{decision_id}/score",
+            json={
+                "scores": [
+                    {"activity_id": pass_id, "metric_id": m.id, "score": 80},
+                    {"activity_id": fail_id, "metric_id": m.id, "score": 30},
+                ]
+            },
+        )
+
+        detail = client.get(f"/api/decisions/{decision_id}").json()
+        assert detail["robustness"] is not None
+        assert detail["robustness"]["winner_id"] == pass_id
+        assert len(detail["robustness"]["rank_acceptability"]) == 1
+        assert detail["robustness"]["rank_acceptability"][0]["activity_name"] == "Pass"
+        # Only one passed alt -> top_two should be None
+        assert detail["robustness"]["top_two"] is None
+
+
 def test_api_decision_rows_expose_sensitivity_scoring_fields(client, db):
     """Decision detail rows include metric ids and decision-level weights."""
     from models import Activity, AlternativeScore, Decision, DecisionWeight, Metric

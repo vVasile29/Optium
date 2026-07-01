@@ -10,6 +10,7 @@ from database import Base
 from models import Decision, Activity, DecisionWeight, Metric, AlternativeScore
 from services.scoring import (
     compute_alternative_fit_scores,
+    evaluate_ko_criteria,
     filter_by_thresholds,
 )
 
@@ -382,3 +383,131 @@ class TestFilterByThresholds:
         assert result["passed"][0]["activity_name"] == "LowCost"
         assert len(result["failed"]) == 1
         assert result["failed"][0]["activity_name"] == "HighCost"
+
+
+# ── KO (Knock-Out) criteria tests ──
+
+
+class TestEvaluateKoCriteria:
+    def test_no_ko_returns_none(self, db):
+        """No KO criteria -> None."""
+        decision = make_decision(db)
+        m = make_metric(db, "Cost")
+        alt = make_activity(db, "Option", decision.id)
+        db.add(DecisionWeight(decision_id=decision.id, metric_id=m.id, weight=100))
+        db.add(AlternativeScore(activity_id=alt.id, metric_id=m.id, score=80))
+        db.commit()
+
+        result = evaluate_ko_criteria(decision.id, db)
+        assert result is None
+
+    def test_ko_all_pass(self, db):
+        """All metrics scored meets thresholds."""
+        decision = make_decision(db)
+        m = make_metric(db, "Cost")
+        alt = make_activity(db, "Good", decision.id)
+        db.add(DecisionWeight(decision_id=decision.id, metric_id=m.id, weight=100))
+        db.add(AlternativeScore(activity_id=alt.id, metric_id=m.id, score=80))
+        decision.ko_criteria = json.dumps(
+            [{"metric_id": m.id, "ko_operator": ">=", "ko_value": 60}]
+        )
+        db.commit()
+
+        result = evaluate_ko_criteria(decision.id, db)
+        assert result is not None
+        assert result["all_passed"] is True
+        assert len(result["results"]) == 1
+        assert result["results"][0]["status"] == "passed"
+        assert result["eligible_activity_ids"] == [alt.id]
+
+    def test_ko_one_fails(self, db):
+        """One alternative fails, one passes."""
+        decision = make_decision(db)
+        m = make_metric(db, "Cost")
+        alt1 = make_activity(db, "Pass", decision.id)
+        alt2 = make_activity(db, "Fail", decision.id)
+        db.add_all(
+            [
+                DecisionWeight(decision_id=decision.id, metric_id=m.id, weight=100),
+                AlternativeScore(activity_id=alt1.id, metric_id=m.id, score=80),
+                AlternativeScore(activity_id=alt2.id, metric_id=m.id, score=30),
+            ]
+        )
+        decision.ko_criteria = json.dumps(
+            [{"metric_id": m.id, "ko_operator": ">=", "ko_value": 60}]
+        )
+        db.commit()
+
+        result = evaluate_ko_criteria(decision.id, db)
+        assert result is not None
+        assert result["all_passed"] is False
+        assert len(result["results"]) == 2
+        passed = [r for r in result["results"] if r["status"] == "passed"]
+        knocked = [r for r in result["results"] if r["status"] == "knocked_out"]
+        assert len(passed) == 1
+        assert passed[0]["activity_name"] == "Pass"
+        assert len(knocked) == 1
+        assert knocked[0]["activity_name"] == "Fail"
+        assert len(knocked[0]["reasons"]) > 0
+        assert result["eligible_activity_ids"] == [alt1.id]
+
+    def test_ko_all_fail(self, db):
+        """All fail KO."""
+        decision = make_decision(db)
+        m = make_metric(db, "Cost")
+        alt1 = make_activity(db, "Low", decision.id)
+        alt2 = make_activity(db, "Lower", decision.id)
+        db.add_all(
+            [
+                DecisionWeight(decision_id=decision.id, metric_id=m.id, weight=100),
+                AlternativeScore(activity_id=alt1.id, metric_id=m.id, score=30),
+                AlternativeScore(activity_id=alt2.id, metric_id=m.id, score=20),
+            ]
+        )
+        decision.ko_criteria = json.dumps(
+            [{"metric_id": m.id, "ko_operator": ">=", "ko_value": 60}]
+        )
+        db.commit()
+
+        result = evaluate_ko_criteria(decision.id, db)
+        assert result is not None
+        assert result["all_passed"] is False
+        assert all(r["status"] == "knocked_out" for r in result["results"])
+        assert result["eligible_activity_ids"] == []
+
+    def test_ko_missing_score(self, db):
+        """Missing score -> knocked_out."""
+        decision = make_decision(db)
+        m = make_metric(db, "Cost")
+        make_activity(db, "NoScore", decision.id)
+        db.add(DecisionWeight(decision_id=decision.id, metric_id=m.id, weight=100))
+        # No AlternativeScore added
+        decision.ko_criteria = json.dumps(
+            [{"metric_id": m.id, "ko_operator": ">=", "ko_value": 60}]
+        )
+        db.commit()
+
+        result = evaluate_ko_criteria(decision.id, db)
+        assert result is not None
+        assert result["all_passed"] is False
+        assert result["results"][0]["status"] == "knocked_out"
+        assert any("No score available" in r for r in result["results"][0]["reasons"])
+        assert result["eligible_activity_ids"] == []
+
+    def test_ko_boundary_score(self, db):
+        """Score == threshold -> pass."""
+        decision = make_decision(db)
+        m = make_metric(db, "Cost")
+        alt = make_activity(db, "Boundary", decision.id)
+        db.add(DecisionWeight(decision_id=decision.id, metric_id=m.id, weight=100))
+        db.add(AlternativeScore(activity_id=alt.id, metric_id=m.id, score=60))
+        decision.ko_criteria = json.dumps(
+            [{"metric_id": m.id, "ko_operator": ">=", "ko_value": 60}]
+        )
+        db.commit()
+
+        result = evaluate_ko_criteria(decision.id, db)
+        assert result is not None
+        assert result["all_passed"] is True
+        assert result["results"][0]["status"] == "passed"
+        assert result["eligible_activity_ids"] == [alt.id]

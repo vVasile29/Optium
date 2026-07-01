@@ -338,6 +338,157 @@ def compute_dimension_scores(decision_id: int, db: Session) -> list[dict]:
     return results
 
 
+# ── KO (Knock-Out) criteria ──
+
+
+def sanitize_persisted_ko_criteria(decision_id: int, db: Session) -> list[dict]:
+    """Return valid saved KO criteria for a decision, skipping corrupt entries."""
+    from models import Decision
+
+    decision = db.query(Decision).filter(Decision.id == decision_id).first()
+    if not decision or not decision.ko_criteria:
+        return []
+
+    try:
+        raw_criteria = json.loads(decision.ko_criteria)
+    except (json.JSONDecodeError, TypeError):
+        return []
+    if not isinstance(raw_criteria, list):
+        return []
+
+    selected_metric_ids = {
+        dw.metric_id
+        for dw in db.query(DecisionWeight)
+        .filter(DecisionWeight.decision_id == decision_id)
+        .all()
+    }
+    valid_operators = {"<=", ">=", "<", ">"}
+    criteria = []
+    for criterion in raw_criteria:
+        if not isinstance(criterion, dict):
+            continue
+
+        metric_id = criterion.get("metric_id")
+        if not isinstance(metric_id, int) or isinstance(metric_id, bool):
+            continue
+        if metric_id not in selected_metric_ids:
+            continue
+
+        ko_operator = criterion.get("ko_operator")
+        if not isinstance(ko_operator, str):
+            continue
+        if ko_operator not in valid_operators:
+            continue
+
+        try:
+            ko_value = float(criterion.get("ko_value"))
+        except (TypeError, ValueError):
+            continue
+        if not math.isfinite(ko_value) or ko_value < 0.0 or ko_value > 100.0:
+            continue
+
+        criteria.append(
+            {"metric_id": metric_id, "ko_operator": ko_operator, "ko_value": ko_value}
+        )
+
+    return criteria
+
+
+def evaluate_ko_criteria(decision_id: int, db: Session) -> dict | None:
+    """Evaluate KO criteria against scored alternatives.
+
+    Returns None if no KO criteria configured.
+    Otherwise returns {
+        "results": [
+            {"activity_id": int, "activity_name": str, "status": "passed"|"knocked_out", "reasons": [str,...]}
+        ],
+        "all_passed": bool,
+        "eligible_activity_ids": [int, ...]
+    }
+    """
+    from models import Activity, AlternativeScore, Metric
+
+    criteria = sanitize_persisted_ko_criteria(decision_id, db)
+    if not criteria:
+        return None
+
+    activities = db.query(Activity).filter(Activity.decision_id == decision_id).all()
+    if not activities:
+        return None
+
+    # Build metric name lookup
+    metric_ids = {c["metric_id"] for c in criteria}
+    metrics = db.query(Metric).filter(Metric.id.in_(metric_ids)).all()
+    metric_name_map = {m.id: m.name for m in metrics}
+
+    # Get all scores for this decision
+    activity_ids = [a.id for a in activities]
+    all_scores = (
+        db.query(AlternativeScore)
+        .filter(AlternativeScore.activity_id.in_(activity_ids))
+        .all()
+    )
+    # Build scores map: {activity_id: {metric_id: score}}
+    scores_map: dict[int, dict[int, float]] = {}
+    for sc in all_scores:
+        if sc.activity_id not in scores_map:
+            scores_map[sc.activity_id] = {}
+        scores_map[sc.activity_id][sc.metric_id] = sc.score
+
+    results = []
+    eligible_ids = []
+
+    for activity in activities:
+        reasons = []
+        for c in criteria:
+            metric_id = c["metric_id"]
+            op = c["ko_operator"]
+            val = c["ko_value"]
+            metric_name = metric_name_map.get(metric_id, f"Metric {metric_id}")
+
+            score = scores_map.get(activity.id, {}).get(metric_id)
+            if score is None:
+                reasons.append(f"No score available for {metric_name}")
+                continue
+
+            # Clamp NaN/Inf to 0.0
+            if not math.isfinite(score):
+                score = 0.0
+
+            # Check KO condition
+            failed = False
+            if op == "<=" and not (score <= val):
+                failed = True
+            elif op == ">=" and not (score >= val):
+                failed = True
+            elif op == "<" and not (score < val):
+                failed = True
+            elif op == ">" and not (score > val):
+                failed = True
+
+            if failed:
+                reasons.append(f"{metric_name} ({score}) fails {op} {val}")
+
+        status = "knocked_out" if reasons else "passed"
+        if status == "passed":
+            eligible_ids.append(activity.id)
+
+        results.append(
+            {
+                "activity_id": activity.id,
+                "activity_name": activity.name,
+                "status": status,
+                "reasons": reasons,
+            }
+        )
+
+    return {
+        "results": results,
+        "all_passed": len([r for r in results if r["status"] == "knocked_out"]) == 0,
+        "eligible_activity_ids": eligible_ids,
+    }
+
+
 def gap_analysis(dimension_scores: list[dict]) -> dict:
     """Compare each dimension score to the overall average.
 
