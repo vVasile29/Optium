@@ -37,7 +37,7 @@ def _robustness_for_results(
 
 
 def _parse_thresholds(decision: Decision, db: Session) -> list:
-    # DB-safety layer for saved thresholds from older versions or manual edits.
+    # DB-safety layer for malformed persisted thresholds or manual edits.
     return sanitize_persisted_thresholds(decision.id, db)
 
 
@@ -90,8 +90,6 @@ def _build_decision_detail(decision_id: int, db: Session) -> dict:
         "decision": {
             "id": decision.id,
             "query": decision.query,
-            "mode": decision.mode if decision.mode else "choose",
-            "category": decision.category,
             "created_at": decision.created_at.isoformat()
             if decision.created_at
             else None,
@@ -103,7 +101,6 @@ def _build_decision_detail(decision_id: int, db: Session) -> dict:
                 "name": m.name,
                 "category": m.category,
                 "description": m.description or "",
-                "higher_is_better": m.higher_is_better,
             }
             for m in metrics
         ],
@@ -167,7 +164,6 @@ def _build_decision_detail(decision_id: int, db: Session) -> dict:
             "metric_id": m.id,
             "metric_name": m.name,
             "metric_desc": m.description or "",
-            "higher_is_better": m.higher_is_better,
             "weight": weight,
             "scores": {},
         }
@@ -287,7 +283,6 @@ def decide(body: dict, db: Session = Depends(get_db)):
 
             return {
                 "decision_id": decision.id,
-                "mode": "diagnose",
                 "next": "review",
             }
 
@@ -311,7 +306,6 @@ def decide(body: dict, db: Session = Depends(get_db)):
             db.commit()
             return {
                 "decision_id": decision.id,
-                "mode": "rank",
                 "next": "review",
             }
 
@@ -334,7 +328,6 @@ def decide(body: dict, db: Session = Depends(get_db)):
 
     return {
         "decision_id": decision.id,
-        "mode": decision.mode if decision.mode else "choose",
         "next": "review",
     }
 
@@ -358,8 +351,6 @@ def list_decisions(
             {
                 "id": d.id,
                 "query": d.query,
-                "mode": d.mode if d.mode else "choose",
-                "category": d.category,
                 "created_at": d.created_at.isoformat() if d.created_at else None,
             }
             for d in decisions
@@ -440,7 +431,6 @@ def refine_decision(
                     "id": m.id,
                     "name": m.name,
                     "weight": mitem.get("weight", 50),
-                    "higher_is_better": m.higher_is_better,
                 }
             )
 
@@ -714,7 +704,6 @@ def list_metrics(db: Session = Depends(get_db)):
                 "name": m.name,
                 "category": m.category,
                 "description": m.description or "",
-                "higher_is_better": m.higher_is_better,
             }
         )
 

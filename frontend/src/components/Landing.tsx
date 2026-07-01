@@ -15,14 +15,6 @@ import {
   Sparkles,
 } from "lucide-react";
 
-const modeBadgeClass: Record<string, string> = {
-  choose:
-    "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200 border-blue-200 dark:border-blue-800",
-  diagnose:
-    "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200 border-green-200 dark:border-green-800",
-  rank: "bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200 border-amber-200 dark:border-amber-800",
-};
-
 export default function Landing() {
   const navigate = useNavigate();
   const [query, setQuery] = useState("");
@@ -313,19 +305,6 @@ export default function Landing() {
                       <p className="text-xs text-muted-foreground">
                         {formatDate(decision.created_at)}
                       </p>
-                      <div className="flex flex-wrap gap-1">
-                        <Badge
-                          className={
-                            modeBadgeClass[decision.mode] ||
-                            modeBadgeClass.choose
-                          }
-                        >
-                          {decision.mode}
-                        </Badge>
-                        {decision.category && (
-                          <Badge variant="outline">{decision.category}</Badge>
-                        )}
-                      </div>
                     </div>
                     <Button
                       variant="ghost"

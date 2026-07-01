@@ -5,8 +5,6 @@
 export interface Decision {
   id: number;
   query: string;
-  mode: string;
-  category: string | null;
   created_at: string | null;
 }
 
@@ -20,7 +18,6 @@ export interface Metric {
   name: string;
   category: string;
   description: string;
-  higher_is_better: boolean;
 }
 
 // ── Scoring ──
@@ -45,10 +42,9 @@ export interface SeriesData {
 }
 
 export interface ScoreRow {
-  metric_id?: number;
+  metric_id: number;
   metric_name: string;
   metric_desc: string;
-  higher_is_better?: boolean;
   weight: number;
   scores: Record<number, number>;
 }
@@ -193,7 +189,6 @@ export interface GroupedMetric {
   name: string;
   category: string;
   description: string;
-  higher_is_better: boolean;
 }
 
 export interface MetricsResponse {
@@ -204,7 +199,6 @@ export interface MetricsResponse {
 
 export interface DecideResponse {
   decision_id: number;
-  mode: string;
   next: string;
 }
 
@@ -222,7 +216,6 @@ export interface RefineResponse {
     id: number;
     name: string;
     weight: number;
-    higher_is_better: boolean;
   }>;
 }
 

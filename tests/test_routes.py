@@ -59,7 +59,6 @@ def db():
                 name=m["name"],
                 category=dim["name"],
                 description=m["description"],
-                higher_is_better=m["higher_is_better"],
             )
             _test_session.add(metric)
     _test_session.commit()
@@ -148,8 +147,9 @@ def test_decide_flow_parsed(client, db):
     )
     assert response.status_code == 200
     data = response.json()
-    assert data["mode"] == "choose"
     assert "decision_id" in data
+    assert "mode" not in data
+    assert "category" not in data
     # Verify alternatives were extracted via the decision detail endpoint
     detail = client.get(f"/api/decisions/{data['decision_id']}")
     names = [a["name"].lower() for a in detail.json()["activities"]]
@@ -161,8 +161,8 @@ def test_decide_flow_with_do_verb(client, db):
     response = client.post("/api/decide", json={"q": "should I do aikido or football"})
     assert response.status_code == 200
     data = response.json()
-    assert data["mode"] == "choose"
     assert "decision_id" in data
+    assert "mode" not in data
     # Verify alternatives were extracted via the decision detail endpoint
     detail = client.get(f"/api/decisions/{data['decision_id']}")
     names = [a["name"].lower() for a in detail.json()["activities"]]
@@ -175,7 +175,7 @@ def test_ontology_parsing(client, db):
     assert response.status_code == 200
     data = response.json()
     assert "decision_id" in data
-    assert data["mode"] == "choose"
+    assert "mode" not in data
 
 
 def test_decision_not_found(client, db):
@@ -247,6 +247,8 @@ def test_full_decision_flow(client, db):
     api_result = client.get(f"/api/decisions/{decision_id}")
     assert api_result.status_code == 200
     api_data = api_result.json()
+    assert "mode" not in api_data["decision"]
+    assert "category" not in api_data["decision"]
     assert "results" in api_data
     assert "series" in api_data
     assert "metric_names" in api_data
@@ -440,15 +442,15 @@ def test_evaluate_result_returns_single_option_robustness(client, db):
 
 
 def test_decide_routes_to_diagnose(client, db):
-    """DIAGNOSE-style query via /api/decide → returns JSON with diagnose mode"""
+    """Diagnose-style query via /api/decide creates a decision."""
     resp = client.post(
         "/api/decide",
         json={"q": "How good is a Tesla for commuting?"},
     )
     assert resp.status_code == 200
     data = resp.json()
-    assert data["mode"] == "diagnose"
     assert "decision_id" in data
+    assert "mode" not in data
 
 
 def test_decide_with_choose_query_still_works(client, db):
@@ -459,8 +461,8 @@ def test_decide_with_choose_query_still_works(client, db):
     )
     assert resp.status_code == 200
     data = resp.json()
-    assert data["mode"] == "choose"
     assert "decision_id" in data
+    assert "mode" not in data
 
 
 def test_decide_with_no_match_fallback(client, db):
@@ -474,19 +476,19 @@ def test_decide_with_no_match_fallback(client, db):
     assert "decision_id" in data
 
 
-# ── RANK (Mode 4) tests ──
+# ── Ranking flow tests ──
 
 
 def test_rank_via_decide(client, db):
-    """List query via /api/decide → returns JSON with rank mode"""
+    """List query via /api/decide creates a decision."""
     resp = client.post(
         "/api/decide",
         json={"q": "Rank Python, Java, Go"},
     )
     assert resp.status_code == 200
     data = resp.json()
-    assert data["mode"] == "rank"
     assert "decision_id" in data
+    assert "mode" not in data
 
 
 def test_rank_flow(client, db):
@@ -532,19 +534,20 @@ def test_rank_flow(client, db):
 
 
 def test_rank_two_items_fallback(client, db):
-    """2 items should NOT route to rank — CHOOSE handles it"""
+    """2 items create a comparison decision."""
     resp = client.post(
         "/api/decide",
         json={"q": "A, B"},
     )
     assert resp.status_code == 200
     data = resp.json()
-    assert data["mode"] == "choose"
+    assert "decision_id" in data
+    assert "mode" not in data
 
 
 def test_rank_result_reuses_decision_result(client, db):
     """Rank result page shows ranking data via API"""
-    # Create a decision with rank mode via /decide
+    # Create a ranking decision via /decide
     resp = client.post("/api/decide", json={"q": "X, Y, Z"})
     assert resp.status_code == 200
     data = resp.json()
@@ -589,7 +592,7 @@ def test_decide_heuristic_routing(client, db):
     )
     assert resp.status_code == 200
     data = resp.json()
-    assert data["mode"] == "choose"
+    assert "mode" not in data
 
     # Heuristic rank detection
     resp3 = client.post(
@@ -598,7 +601,7 @@ def test_decide_heuristic_routing(client, db):
     )
     assert resp3.status_code == 200
     data3 = resp3.json()
-    assert data3["mode"] == "rank"
+    assert "mode" not in data3
 
     # Heuristic diagnose detection
     resp4 = client.post(
@@ -607,7 +610,7 @@ def test_decide_heuristic_routing(client, db):
     )
     assert resp4.status_code == 200
     data4 = resp4.json()
-    assert data4["mode"] == "diagnose"
+    assert "mode" not in data4
 
 
 # ── Threshold filter tests (post-hoc on decision result page) ──
@@ -652,16 +655,16 @@ def test_decision_result_threshold_panel_renders(client, db):
     assert all(tc["operator"] == ">=" for tc in data["threshold_criteria"])
 
 
-def test_seeded_cost_risk_time_are_benefit_oriented(db):
+def test_seeded_cost_risk_time_have_current_shape(db):
     metrics = {
         m.name: m
         for m in db.query(Metric)
         .filter(Metric.name.in_(["Cost", "Risk", "Time Required"]))
         .all()
     }
-    assert metrics["Cost"].higher_is_better is True
-    assert metrics["Risk"].higher_is_better is True
-    assert metrics["Time Required"].higher_is_better is True
+    assert metrics["Cost"].description == "Cost fit and affordability"
+    assert metrics["Risk"].description == "Low-risk fit and downside protection"
+    assert metrics["Time Required"].description == "Time fit, speed, and schedule compatibility"
 
 
 def test_decision_apply_thresholds_valid(client, db):
@@ -1133,6 +1136,48 @@ def _seed_scored_decision(db, mode="choose"):
     return decision
 
 
+def test_delete_decision_removes_owned_rows(client, db):
+    from models import Activity, AlternativeScore, DecisionWeight
+
+    decision = _seed_scored_decision(db, "choose")
+    decision_id = decision.id
+    activity_ids = [activity.id for activity in decision.activities]
+
+    assert db.query(Decision).filter(Decision.id == decision_id).first() is not None
+    assert db.query(Activity).filter(Activity.decision_id == decision_id).count() == 2
+    assert (
+        db.query(DecisionWeight)
+        .filter(DecisionWeight.decision_id == decision_id)
+        .count()
+        == 3
+    )
+    assert (
+        db.query(AlternativeScore)
+        .filter(AlternativeScore.activity_id.in_(activity_ids))
+        .count()
+        == 6
+    )
+
+    response = client.post(f"/api/decisions/{decision_id}/delete")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "deleted"}
+    assert db.query(Decision).filter(Decision.id == decision_id).first() is None
+    assert db.query(Activity).filter(Activity.decision_id == decision_id).count() == 0
+    assert (
+        db.query(DecisionWeight)
+        .filter(DecisionWeight.decision_id == decision_id)
+        .count()
+        == 0
+    )
+    assert (
+        db.query(AlternativeScore)
+        .filter(AlternativeScore.activity_id.in_(activity_ids))
+        .count()
+        == 0
+    )
+
+
 def test_export_markdown_endpoint(client, db):
     """Export markdown works via consolidated /api endpoint.
 
@@ -1141,12 +1186,14 @@ def test_export_markdown_endpoint(client, db):
     choose = _seed_scored_decision(db, "choose")
     diagnose = _seed_scored_decision(db, "diagnose")
 
-    # ── choose mode export ──
+    # ── comparison export ──
     resp = client.get(f"/api/decisions/{choose.id}/export-markdown")
     assert resp.status_code == 200
     assert resp.headers["content-type"].startswith("text/markdown")
     assert "attachment" in resp.headers["content-disposition"]
     assert "Decision Brief" in resp.text
+    assert "- Mode:" not in resp.text
+    assert "- Category:" not in resp.text
     assert "Decision Robustness" in resp.text
     assert (
         "Monte Carlo sensitivity analysis on a weighted additive value model (WAVM)"
@@ -1160,7 +1207,7 @@ def test_export_markdown_endpoint(client, db):
     assert "p-value" not in resp.text
     assert "t-statistic" not in resp.text
 
-    # ── diagnose mode export ──
+    # ── diagnosis export ──
     resp = client.get(f"/api/decisions/{diagnose.id}/export-markdown")
     assert resp.status_code == 200
     assert resp.headers["content-type"].startswith("text/markdown")
@@ -1206,10 +1253,10 @@ def test_slider_fill_markup_and_sensitivity_classes(client, db):
 
 
 def test_api_decision_rows_expose_sensitivity_scoring_fields(client, db):
-    """Decision detail rows include metric direction and decision-level weights."""
+    """Decision detail rows include metric ids and decision-level weights."""
     from models import Activity, AlternativeScore, Decision, DecisionWeight, Metric
 
-    metric = Metric(name="Legacy Direction", category="General", higher_is_better=False)
+    metric = Metric(name="Sensitivity", category="General")
     db.add(metric)
     db.flush()
 
@@ -1233,7 +1280,7 @@ def test_api_decision_rows_expose_sensitivity_scoring_fields(client, db):
     row = data["rows"][0]
 
     assert row["metric_id"] == metric.id
-    assert row["higher_is_better"] is False
+    assert "higher_is_better" not in row
     # Decision-level weight: both activities use the same weight
     assert row["weight"] == 80
     assert data["results"][0]["activity_name"] == "Second"

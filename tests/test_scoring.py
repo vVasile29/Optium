@@ -33,8 +33,8 @@ def make_decision(db, query="Test decision?"):
     return d
 
 
-def make_metric(db, name, category="Financial", higher_is_better=True):
-    m = Metric(name=name, category=category, higher_is_better=higher_is_better)
+def make_metric(db, name, category="Financial"):
+    m = Metric(name=name, category=category)
     db.add(m)
     db.flush()
     return m
@@ -49,7 +49,7 @@ def make_activity(db, name, decision_id):
 
 def test_basic_scoring(db):
     decision = make_decision(db)
-    m1 = make_metric(db, "Cost", higher_is_better=False)
+    m1 = make_metric(db, "Cost")
     m2 = make_metric(db, "Quality")
     alt1 = make_activity(db, "Option A", decision.id)
     alt2 = make_activity(db, "Option B", decision.id)
@@ -82,10 +82,10 @@ def test_basic_scoring(db):
     assert round(results[1]["fit_score"], 4) == 0.5143
 
 
-def test_metric_direction_ignored_for_scoring_compatibility(db):
-    """Metric.higher_is_better is retained but scores are benefit-oriented."""
+def test_scores_are_direct_benefit_values(db):
+    """Scores are treated as direct benefit-oriented values."""
     decision = make_decision(db)
-    m = make_metric(db, "Cost", higher_is_better=False)
+    m = make_metric(db, "Cost")
     alt = make_activity(db, "Cheap", decision.id)
     db.add(DecisionWeight(decision_id=decision.id, metric_id=m.id, weight=100))
     db.add(AlternativeScore(activity_id=alt.id, metric_id=m.id, score=30))
@@ -95,12 +95,12 @@ def test_metric_direction_ignored_for_scoring_compatibility(db):
     assert round(results[0]["fit_score"], 4) == 0.3000
 
 
-def test_mixed_legacy_direction_metadata_scoring(db):
-    """Multiple metrics use direct benefit scores regardless of direction metadata."""
+def test_mixed_metric_scoring_uses_direct_benefit_values(db):
+    """Multiple metrics use direct benefit scores."""
     decision = make_decision(db)
-    m1 = make_metric(db, "Cost", category="Financial", higher_is_better=False)
-    m2 = make_metric(db, "Quality", category="Quality", higher_is_better=True)
-    m3 = make_metric(db, "Risk", category="Risk", higher_is_better=False)
+    m1 = make_metric(db, "Cost", category="Financial")
+    m2 = make_metric(db, "Quality", category="Quality")
+    m3 = make_metric(db, "Risk", category="Risk")
     alt1 = make_activity(db, "Option A", decision.id)
     alt2 = make_activity(db, "Option B", decision.id)
 
@@ -132,11 +132,11 @@ def test_mixed_legacy_direction_metadata_scoring(db):
     assert round(results[1]["fit_score"], 4) == 0.4737
 
 
-def test_all_legacy_lower_is_better_metadata_scoring(db):
-    """All scores are treated as benefit scores even with legacy metadata."""
+def test_all_low_cost_risk_scores_are_direct_values(db):
+    """All scores are treated as benefit scores."""
     decision = make_decision(db)
-    m1 = make_metric(db, "Cost", higher_is_better=False)
-    m2 = make_metric(db, "Risk", higher_is_better=False)
+    m1 = make_metric(db, "Cost")
+    m2 = make_metric(db, "Risk")
     alt1 = make_activity(db, "Good", decision.id)
     alt2 = make_activity(db, "Bad", decision.id)
     db.add_all(
@@ -158,10 +158,10 @@ def test_all_legacy_lower_is_better_metadata_scoring(db):
 
 
 def test_boundary_scores(db):
-    """Scores at 0 and 100 boundaries with legacy direction metadata."""
+    """Scores at 0 and 100 boundaries."""
     decision = make_decision(db)
-    m1 = make_metric(db, "Cost", higher_is_better=False)
-    m2 = make_metric(db, "Quality", higher_is_better=True)
+    m1 = make_metric(db, "Cost")
+    m2 = make_metric(db, "Quality")
     alt1 = make_activity(db, "Best", decision.id)
     alt2 = make_activity(db, "Worst", decision.id)
     db.add_all(
@@ -186,8 +186,8 @@ def test_dimension_scores_use_direct_benefit_scores(db):
     from services.scoring import compute_dimension_scores
 
     decision = make_decision(db)
-    m1 = make_metric(db, "Cost", category="Financial", higher_is_better=False)
-    m2 = make_metric(db, "Value", category="Financial", higher_is_better=True)
+    m1 = make_metric(db, "Cost", category="Financial")
+    m2 = make_metric(db, "Value", category="Financial")
     alt = make_activity(db, "Option", decision.id)
     db.add_all(
         [
@@ -209,7 +209,7 @@ def test_dimension_scores_use_direct_benefit_scores(db):
 def test_missing_metric_row_still_scores_directly(db):
     """Missing metric metadata does not affect direct benefit scoring."""
     decision = make_decision(db)
-    m = make_metric(db, "Cost", higher_is_better=False)
+    m = make_metric(db, "Cost")
     alt = make_activity(db, "Test", decision.id)
     fake_metric_id = 99999  # Does not exist in Metric table
     db.add(DecisionWeight(decision_id=decision.id, metric_id=m.id, weight=80))

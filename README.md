@@ -247,8 +247,10 @@ client-side React SPA that communicates exclusively with these API endpoints.
 
 - **Thresholds** are a post-hoc result-page feature, not a separate entry mode.
 - **Decision-level weights** (`DecisionWeight` model) are shared across all
-  alternatives for a given decision. The old per-alternative `ActivityWeight`
-  model has been removed.
+  alternatives for a given decision.
+- **Development schema resets** may be required after breaking model changes.
+  This project uses SQLAlchemy `create_all` rather than migrations, so delete or
+  recreate local SQLite databases when columns or constraints change.
 - The database defaults to SQLite. Other `sqlalchemy`-compatible databases may
   work via the `DATABASE_URL` environment variable, but only SQLite is tested
   in development and Docker.

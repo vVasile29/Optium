@@ -13,8 +13,7 @@ async def lifespan(app: FastAPI):
     from database import Base, engine, SessionLocal
 
     Base.metadata.create_all(bind=engine)
-    # Seed universal metrics and sync built-in metadata by name so existing dev DBs
-    # pick up product-defined universal criteria changes on restart.
+    # Seed universal metrics and sync built-in metadata by name.
     from services.ontology import UNIVERSAL_DIMENSIONS
     from models import Metric
 
@@ -27,13 +26,11 @@ async def lifespan(app: FastAPI):
                 if metric:
                     metric.category = dim["name"]
                     metric.description = m["description"]
-                    metric.higher_is_better = m["higher_is_better"]
                 else:
                     metric = Metric(
                         name=m["name"],
                         category=dim["name"],
                         description=m["description"],
-                        higher_is_better=m["higher_is_better"],
                     )
                     db.add(metric)
         db.commit()

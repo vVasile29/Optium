@@ -87,9 +87,7 @@ def get_decision_export_data(decision_id: int, db: Session) -> dict | None:
         "decision": {
             "id": decision.id,
             "query": decision.query,
-            "mode": getattr(decision, "mode", None) or "choose",
             "created_at": decision.created_at,
-            "category": decision.category,
         },
         "activities": [
             {"id": activity.id, "name": activity.name} for activity in activities
@@ -120,8 +118,6 @@ def generate_markdown_brief(data: dict) -> str:
     lines = [
         f"# Decision Brief: {decision['query']}",
         "",
-        f"- Mode: {decision['mode']}",
-        f"- Category: {decision.get('category') or 'General'}",
         f"- Created: {decision['created_at']}",
         "",
         "## Alternatives",

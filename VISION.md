@@ -139,7 +139,7 @@ public modes.
 - Make threshold filters easier to understand and edit on result pages
 - Reduce duplication between comparison, ranking, and diagnosis result handling
 - Improve empty and ambiguous prompt guidance
-- Clean up dead CSS and legacy mode language in UI internals
+- Clean up dead CSS and simplify internal flow-specific UI code
 
 ### Later Possibilities
 

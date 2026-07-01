@@ -3,15 +3,8 @@ import { useNavigate } from "react-router-dom";
 import { api } from "@/lib/api";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { Trash2, ExternalLink } from "lucide-react";
 import type { Decision, DecisionListResponse } from "@/types";
-
-const MODE_COLORS: Record<string, string> = {
-  choose: "bg-blue-500",
-  diagnose: "bg-green-500",
-  rank: "bg-amber-500",
-};
 
 export default function DecisionList() {
   const [decisions, setDecisions] = useState<Decision[]>([]);
@@ -59,9 +52,6 @@ export default function DecisionList() {
               <CardContent className="p-4 flex items-center justify-between">
                 <div className="flex-1" onClick={() => navigate(modeUrl(d))}>
                   <div className="flex items-center gap-2 mb-1">
-                    <Badge className={MODE_COLORS[d.mode || "choose"]}>
-                      {d.mode || "choose"}
-                    </Badge>
                     <span className="text-sm text-muted-foreground">
                       {d.created_at
                         ? new Date(d.created_at).toLocaleDateString()
@@ -69,11 +59,6 @@ export default function DecisionList() {
                     </span>
                   </div>
                   <p className="font-medium">{d.query}</p>
-                  {d.category && (
-                    <p className="text-sm text-muted-foreground">
-                      {d.category}
-                    </p>
-                  )}
                 </div>
                 <div className="flex items-center gap-2">
                   <Button

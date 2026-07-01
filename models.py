@@ -5,7 +5,6 @@ from sqlalchemy import (
     Integer,
     String,
     Float,
-    Boolean,
     ForeignKey,
     DateTime,
     UniqueConstraint,
@@ -72,9 +71,6 @@ class Metric(Base):
     name = Column(String, index=True, nullable=False)
     category = Column(String, nullable=False)
     description = Column(String, nullable=True)
-    # Compatibility field — all scores are now benefit-oriented (higher is always better).
-    # Scoring no longer inverts based on this field. Kept for schema/API compatibility.
-    higher_is_better = Column(Boolean, default=True, nullable=False)
 
     __table_args__ = (UniqueConstraint("name", name="uq_metric_name"),)
 
@@ -89,8 +85,9 @@ class Activity(Base):
     name = Column(String, index=True, nullable=False)
     category = Column(String, nullable=False)
     description = Column(String, nullable=True)
-    # TODO: make non-nullable with ondelete="CASCADE" in a migration-backed cleanup.
-    decision_id = Column(Integer, ForeignKey("decisions.id"), nullable=True, index=True)
+    decision_id = Column(
+        Integer, ForeignKey("decisions.id", ondelete="CASCADE"), nullable=False, index=True
+    )
 
     decision = relationship("Decision", back_populates="activities")
 

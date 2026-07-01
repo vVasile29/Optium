@@ -3,7 +3,7 @@ import {
   pythonRound,
   recomputeFitScores,
 } from "../src/lib/scoring.js";
-import type { Activity, FilterResult, FitResult, Metric, ScoreRow } from "../src/types/index.js";
+import type { Activity, FilterResult, FitResult, ScoreRow } from "../src/types/index.js";
 
 function assertEqual<T>(actual: T, expected: T) {
   if (actual !== expected) {
@@ -24,23 +24,6 @@ const activities: Activity[] = [
   { id: 2, name: "Beta" },
 ];
 
-const metrics: Metric[] = [
-  {
-    id: 10,
-    name: "Cost",
-    category: "Financial",
-    description: "",
-    higher_is_better: false,
-  },
-  {
-    id: 11,
-    name: "Quality",
-    category: "Quality",
-    description: "",
-    higher_is_better: true,
-  },
-];
-
 function names(results: FitResult[]) {
   return results.map((r) => r.activity_name);
 }
@@ -51,13 +34,12 @@ function names(results: FitResult[]) {
       metric_id: 10,
       metric_name: "Cost",
       metric_desc: "",
-      higher_is_better: false,
       weight: 100,
       scores: { 1: 80, 2: 20 },
     },
   ];
 
-  const results = recomputeFitScores(activities, rows, {}, metrics);
+  const results = recomputeFitScores(activities, rows, {});
   assertDeepEqual(names(results), ["Alpha", "Beta"]);
   assertEqual(results[0].fit_score, 0.8);
   assertEqual(results[1].fit_score, 0.2);
@@ -69,7 +51,6 @@ function names(results: FitResult[]) {
       metric_id: 10,
       metric_name: "Cost",
       metric_desc: "",
-      higher_is_better: false,
       weight: 50,
       scores: { 1: 30, 2: 70 },
     },
@@ -77,18 +58,16 @@ function names(results: FitResult[]) {
       metric_id: 11,
       metric_name: "Quality",
       metric_desc: "",
-      higher_is_better: true,
       weight: 50,
       scores: { 1: 80, 2: 60 },
     },
   ];
 
-  const base = recomputeFitScores(activities, rows, {}, metrics);
+  const base = recomputeFitScores(activities, rows, {});
   const restored = recomputeFitScores(
     activities,
     rows,
     { Cost: 50, Quality: 50 },
-    metrics,
   );
   assertDeepEqual(restored, base);
 }
@@ -99,7 +78,6 @@ function names(results: FitResult[]) {
       metric_id: 10,
       metric_name: "Cost",
       metric_desc: "",
-      higher_is_better: false,
       weight: 100,
       scores: { 1: 80, 2: 10 },
     },
@@ -107,7 +85,6 @@ function names(results: FitResult[]) {
       metric_id: 11,
       metric_name: "Quality",
       metric_desc: "",
-      higher_is_better: true,
       weight: 100,
       scores: { 1: 10, 2: 90 },
     },
@@ -117,7 +94,6 @@ function names(results: FitResult[]) {
     activities,
     rows,
     { Cost: 100, Quality: 100 },
-    metrics,
   );
   const alpha = results.find((r) => r.activity_id === 1)!;
   const beta = results.find((r) => r.activity_id === 2)!;
@@ -136,12 +112,11 @@ function names(results: FitResult[]) {
       metric_id: 11,
       metric_name: "Quality",
       metric_desc: "",
-      higher_is_better: true,
       weight: 100,
       scores: { 1: 81.245, 2: 81.244 },
     },
   ];
-  const results = recomputeFitScores(activities, rows, {}, metrics);
+  const results = recomputeFitScores(activities, rows, {});
   assertEqual(results[0].fit_score, 0.8124);
 }
 

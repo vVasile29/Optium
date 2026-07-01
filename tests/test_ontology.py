@@ -7,12 +7,12 @@ from services.ontology import (
 )
 
 
-def test_universal_metrics_are_benefit_oriented():
+def test_universal_metrics_have_current_shape():
     metrics = {m["name"]: m for m in UNIVERSAL_METRICS}
-    assert metrics["Cost"]["higher_is_better"] is True
-    assert metrics["Risk"]["higher_is_better"] is True
-    assert metrics["Time Required"]["higher_is_better"] is True
-    assert all(m["higher_is_better"] is True for m in UNIVERSAL_METRICS)
+    assert metrics["Cost"]["default_weight"] == 90
+    assert metrics["Risk"]["default_weight"] == 80
+    assert metrics["Time Required"]["default_weight"] == 70
+    assert all("higher_is_better" not in m for m in UNIVERSAL_METRICS)
 
 
 def test_get_universal_criteria_returns_all_metrics():

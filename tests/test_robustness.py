@@ -21,7 +21,7 @@ def _db():
 
 def _decision_with_options(db, scores=(90, 70), weights=(100,)):
     decision = Decision(query="Pick one", category="General")
-    metric = Metric(name="Quality", category="Quality", higher_is_better=True)
+    metric = Metric(name="Quality", category="Quality")
     db.add_all([decision, metric])
     db.flush()
     # Create decision-level weight(s) — shared across all activities
@@ -147,9 +147,7 @@ def test_robustness_workload_guard_returns_none():
     db.flush()
     metrics = []
     for index in range(MAX_DECISION_METRICS):
-        metric = Metric(
-            name=f"Metric {index}", category="General", higher_is_better=True
-        )
+        metric = Metric(name=f"Metric {index}", category="General")
         db.add(metric)
         db.flush()
         metrics.append(metric)

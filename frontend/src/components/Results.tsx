@@ -87,7 +87,6 @@ export default function Results() {
       data.activities,
       data.rows,
       metricWeights,
-      data.metrics,
     );
   }, [data, metricWeights]);
 
