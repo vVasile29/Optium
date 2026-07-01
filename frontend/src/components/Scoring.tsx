@@ -7,24 +7,22 @@ import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, ArrowRight, ArrowUp, ArrowDown } from "lucide-react";
+import { Loader2, ArrowRight } from "lucide-react";
 
-/** Map a score (0–100) and direction to a Tailwind text color class. */
-function scoreColor(value: number, higherIsBetter: boolean): string {
+/** Map a benefit score (0–100) to a Tailwind text color class. */
+function scoreColor(value: number): string {
   const pct = value / 100;
-  const adjusted = higherIsBetter ? pct : 1 - pct;
-  if (adjusted >= 0.7) return "text-green-600 dark:text-green-400";
-  if (adjusted >= 0.4) return "text-amber-600 dark:text-amber-400";
+  if (pct >= 0.7) return "text-green-600 dark:text-green-400";
+  if (pct >= 0.4) return "text-amber-600 dark:text-amber-400";
   return "text-red-600 dark:text-red-400";
 }
 
 /** Label tick for a given score value. */
-function scoreLabel(value: number, higherIsBetter: boolean): string {
-  const displayValue = higherIsBetter ? value : 100 - value;
-  if (displayValue >= 95) return "Excellent";
-  if (displayValue >= 75) return "Good";
-  if (displayValue >= 50) return "Average";
-  if (displayValue >= 25) return "Below Avg";
+function scoreLabel(value: number): string {
+  if (value >= 95) return "Excellent";
+  if (value >= 75) return "Good";
+  if (value >= 50) return "Average";
+  if (value >= 25) return "Below Avg";
   return "Poor";
 }
 
@@ -114,6 +112,9 @@ export default function Scoring() {
       <div>
         <h1 className="text-3xl font-bold">Score Your Alternatives</h1>
         <p className="text-muted-foreground mt-1">{data.decision.query}</p>
+        <p className="text-sm text-muted-foreground mt-2">
+          Every slider is a 0–100 benefit score: higher is always better.
+        </p>
       </div>
 
       {/* Submit Error */}
@@ -149,24 +150,11 @@ export default function Scoring() {
             >
               {/* Row header — metric info */}
               <div className="p-3 flex flex-col justify-center min-w-0">
-                <div className="flex items-center gap-1">
-                  <span className="text-sm font-medium truncate">
-                    {metric.name}
-                  </span>
-                  {metric.higher_is_better ? (
-                    <ArrowUp className="h-3 w-3 shrink-0 text-muted-foreground" />
-                  ) : (
-                    <ArrowDown className="h-3 w-3 shrink-0 text-muted-foreground" />
-                  )}
-                </div>
+                <span className="text-sm font-medium truncate">{metric.name}</span>
                 <span className="text-xs text-muted-foreground truncate">
                   {metric.description}
                 </span>
-                <span className="text-xs text-muted-foreground">
-                  {metric.higher_is_better
-                    ? "Higher is better"
-                    : "Lower is better"}
-                </span>
+                <span className="text-xs text-muted-foreground">Higher is better</span>
               </div>
 
               {/* Per-alternative slider cells */}
@@ -187,12 +175,12 @@ export default function Scoring() {
                       />
                       <div className="flex flex-col items-center shrink-0 w-14">
                         <span
-                          className={`text-sm font-mono tabular-nums ${scoreColor(val, metric.higher_is_better)}`}
+                          className={`text-sm font-mono tabular-nums ${scoreColor(val)}`}
                         >
                           {val}
                         </span>
                         <span className="text-[10px] text-muted-foreground leading-tight">
-                          {scoreLabel(val, metric.higher_is_better)}
+                          {scoreLabel(val)}
                         </span>
                       </div>
                     </div>
@@ -217,19 +205,10 @@ export default function Scoring() {
                 return (
                   <div key={`${act.id}_${metric.id}`} className="space-y-2">
                     <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-1 min-w-0">
-                        <span className="text-sm font-medium truncate">
-                          {metric.name}
-                        </span>
-                        {metric.higher_is_better ? (
-                          <ArrowUp className="h-3 w-3 shrink-0 text-muted-foreground" />
-                        ) : (
-                          <ArrowDown className="h-3 w-3 shrink-0 text-muted-foreground" />
-                        )}
-                      </div>
+                      <span className="text-sm font-medium truncate">{metric.name}</span>
                       <div className="flex items-center gap-1 shrink-0">
                         <span
-                          className={`text-sm font-mono tabular-nums ${scoreColor(val, metric.higher_is_better)}`}
+                          className={`text-sm font-mono tabular-nums ${scoreColor(val)}`}
                         >
                           {val}
                         </span>
@@ -237,7 +216,7 @@ export default function Scoring() {
                           variant="outline"
                           className="text-[10px] px-1.5 py-0 h-5"
                         >
-                          {scoreLabel(val, metric.higher_is_better)}
+                          {scoreLabel(val)}
                         </Badge>
                       </div>
                     </div>
@@ -251,23 +230,11 @@ export default function Scoring() {
                       step={1}
                     />
                     <div className="flex justify-between text-[10px] text-muted-foreground">
-                      {metric.higher_is_better ? (
-                        <>
-                          <span>Poor</span>
-                          <span>Below Avg</span>
-                          <span>Average</span>
-                          <span>Good</span>
-                          <span>Excellent</span>
-                        </>
-                      ) : (
-                        <>
-                          <span>Excellent</span>
-                          <span>Good</span>
-                          <span>Average</span>
-                          <span>Below Avg</span>
-                          <span>Poor</span>
-                        </>
-                      )}
+                      <span>Poor</span>
+                      <span>Below Avg</span>
+                      <span>Average</span>
+                      <span>Good</span>
+                      <span>Excellent</span>
                     </div>
                   </div>
                 );

@@ -24,7 +24,7 @@ class Decision(Base):
     mode = Column(String, default="choose", nullable=False)
     thresholds = Column(
         String, nullable=True
-    )  # JSON string: [{"metric_id": 1, "operator": "<=", "value": 60}]
+    )  # JSON string: [{"metric_id": 1, "operator": ">=", "value": 60}]
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     activities = relationship(

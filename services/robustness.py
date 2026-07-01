@@ -2,7 +2,7 @@ import random
 
 from sqlalchemy.orm import Session
 
-from models import Activity, DecisionWeight, AlternativeScore, Metric
+from models import Activity, DecisionWeight, AlternativeScore
 from services.decision_limits import robustness_workload_allowed
 
 
@@ -37,17 +37,13 @@ def _fit(
     metric_ids: list[int],
     weights: dict[int, float],
     scores: dict[int, float],
-    higher_is_better: dict[int, bool],
 ) -> float:
     numerator = 0.0
     denominator = 0.0
     for metric_id in metric_ids:
         weight = _clamp(float(weights.get(metric_id, 0.0)))
         score = _clamp(float(scores.get(metric_id, 0.0)))
-        effective_score = (
-            score if higher_is_better.get(metric_id, True) else 100.0 - score
-        )
-        numerator += effective_score * weight
+        numerator += score * weight
         denominator += weight
     return numerator / denominator / 100.0 if denominator > 0 else 0.0
 
@@ -155,17 +151,11 @@ def build_decision_robustness(
     metric_ids = sorted(metric_ids_set)
     if not robustness_workload_allowed(len(activities), len(metric_ids)):
         return None
-    metrics = (
-        db.query(Metric).filter(Metric.id.in_(metric_ids)).all() if metric_ids else []
-    )
-    higher_is_better = {metric.id: metric.higher_is_better for metric in metrics}
-
     base_scores = {
         activity.id: _fit(
             metric_ids,
             decision_weights,
             scores_by_activity.get(activity.id, {}),
-            higher_is_better,
         )
         for activity in activities
     }
@@ -219,7 +209,7 @@ def build_decision_robustness(
                 for metric_id, score in scores_by_activity.get(activity.id, {}).items()
             }
             simulated_scores[activity.id] = _fit(
-                metric_ids, sampled_weights, sampled_scores_local, higher_is_better
+                metric_ids, sampled_weights, sampled_scores_local
             )
 
         top_score = max(simulated_scores.values())

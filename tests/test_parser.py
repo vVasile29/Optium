@@ -137,12 +137,12 @@ class TestExtractList:
 
 
 class TestExtractThresholds:
-    def test_cost_less_than_or_equal(self):
-        result = extract_thresholds("Cost <= 60")
+    def test_cost_greater_than_or_equal(self):
+        result = extract_thresholds("Cost >= 60")
         assert len(result) == 1
         r = result[0]
         assert r["metric_name"] == "Cost"
-        assert r["operator"] == "<="
+        assert r["operator"] == ">="
         assert r["value"] == 60.0
 
     def test_quality_greater_than_or_equal(self):
@@ -170,7 +170,7 @@ class TestExtractThresholds:
         assert r["value"] == 80.0
 
     def test_multiple_thresholds(self):
-        result = extract_thresholds("Cost <= 60 and Quality >= 80")
+        result = extract_thresholds("Cost >= 60 and Quality >= 80")
         assert len(result) >= 2
         names = {r["metric_name"] for r in result}
         assert "Cost" in names
@@ -204,7 +204,7 @@ class TestExtractThresholds:
 class TestExtractThresholdsDetailed:
     def test_percent_suffix(self):
         """% suffix is stripped and value parsed correctly."""
-        result = extract_thresholds_detailed("Cost <= 60%")
+        result = extract_thresholds_detailed("Cost >= 60%")
         assert len(result["valid"]) == 1
         assert result["valid"][0]["metric_name"] == "Cost"
         assert result["valid"][0]["value"] == 60.0
@@ -237,7 +237,7 @@ class TestExtractThresholdsDetailed:
 
     def test_out_of_range_negative(self):
         """Negative values don't match threshold patterns (regex requires digits)."""
-        result = extract_thresholds_detailed("Cost <= -10")
+        result = extract_thresholds_detailed("Cost >= -10")
         # -10 doesn't match \d+ pattern, so no threshold is extracted
         assert len(result["valid"]) == 0
         assert len(result["unknown"]) == 0
@@ -245,7 +245,7 @@ class TestExtractThresholdsDetailed:
 
     def test_mixed_valid_and_unknown(self):
         """Known and unknown metrics are separated correctly."""
-        result = extract_thresholds_detailed("Cost <= 60 and popularity > 50")
+        result = extract_thresholds_detailed("Cost >= 60 and popularity > 50")
         assert len(result["valid"]) == 1
         assert result["valid"][0]["metric_name"] == "Cost"
         assert len(result["unknown"]) >= 1
@@ -255,7 +255,7 @@ class TestExtractThresholdsDetailed:
     def test_backward_compatible_extract_thresholds(self):
         """extract_thresholds() retains original behavior (no validation)."""
         # Known metric
-        r1 = extract_thresholds("Cost <= 60")
+        r1 = extract_thresholds("Cost >= 60")
         assert len(r1) == 1
         assert r1[0]["metric_name"] == "Cost"
         # Unknown metric — still ignored
@@ -266,7 +266,7 @@ class TestExtractThresholdsDetailed:
         assert len(r3) == 1
         assert r3[0]["value"] == 150.0
         # Multiple
-        r4 = extract_thresholds("Cost <= 60 and Quality >= 80")
+        r4 = extract_thresholds("Cost >= 60 and Quality >= 80")
         assert len(r4) == 2
 
     def test_detailed_returns_three_keys(self):

@@ -76,19 +76,14 @@ def test_basic_scoring(db):
 
     results = compute_alternative_fit_scores(decision.id, db)
     assert len(results) == 2
-    # Cost is lower-is-better (inverted):
-    #   Option A: effective Cost = 100-30 = 70, numerator = 70*80 + 80*60 = 10400
-    #             fit = 10400/140/100 = 74.2857/100 = 0.7429
-    #   Option B: effective Cost = 100-70 = 30, numerator = 30*80 + 40*60 = 4800
-    #             fit = 4800/140/100 = 34.2857/100 = 0.3429
-    assert results[0]["activity_name"] == "Option A"
-    assert results[1]["activity_name"] == "Option B"
-    assert round(results[0]["fit_score"], 4) == 0.7429
-    assert round(results[1]["fit_score"], 4) == 0.3429
+    assert results[0]["activity_name"] == "Option B"
+    assert results[1]["activity_name"] == "Option A"
+    assert round(results[0]["fit_score"], 4) == 0.5714
+    assert round(results[1]["fit_score"], 4) == 0.5143
 
 
-def test_lower_is_better_scoring(db):
-    """Single metric that is lower-is-better should be inverted."""
+def test_metric_direction_ignored_for_scoring_compatibility(db):
+    """Metric.higher_is_better is retained but scores are benefit-oriented."""
     decision = make_decision(db)
     m = make_metric(db, "Cost", higher_is_better=False)
     alt = make_activity(db, "Cheap", decision.id)
@@ -97,13 +92,11 @@ def test_lower_is_better_scoring(db):
     db.commit()
     results = compute_alternative_fit_scores(decision.id, db)
     assert len(results) == 1
-    # effective_score = 100 - 30 = 70
-    # fit = 70*100/100/100 = 0.7000
-    assert round(results[0]["fit_score"], 4) == 0.7000
+    assert round(results[0]["fit_score"], 4) == 0.3000
 
 
-def test_mixed_direction_scoring(db):
-    """Multiple metrics with mixed lower/higher-is-better directions."""
+def test_mixed_legacy_direction_metadata_scoring(db):
+    """Multiple metrics use direct benefit scores regardless of direction metadata."""
     decision = make_decision(db)
     m1 = make_metric(db, "Cost", category="Financial", higher_is_better=False)
     m2 = make_metric(db, "Quality", category="Quality", higher_is_better=True)
@@ -120,14 +113,6 @@ def test_mixed_direction_scoring(db):
     )
     db.flush()
 
-    # Option A: Cost=40, Quality=80, Risk=20
-    #   effective: Cost=60, Quality=80, Risk=80
-    #   numerator = 60*80 + 80*60 + 80*50 = 13600
-    #   denominator = 190, fit = 13600/190/100 = 0.7158
-    # Option B: Cost=80, Quality=30, Risk=70
-    #   effective: Cost=20, Quality=30, Risk=30
-    #   numerator = 20*80 + 30*60 + 30*50 = 4900
-    #   denominator = 190, fit = 4900/190/100 = 0.2579
     db.add_all(
         [
             AlternativeScore(activity_id=alt1.id, metric_id=m1.id, score=40),
@@ -142,13 +127,13 @@ def test_mixed_direction_scoring(db):
 
     results = compute_alternative_fit_scores(decision.id, db)
     assert len(results) == 2
-    assert results[0]["activity_name"] == "Option A"
-    assert round(results[0]["fit_score"], 4) == 0.7158
-    assert round(results[1]["fit_score"], 4) == 0.2579
+    assert results[0]["activity_name"] == "Option B"
+    assert round(results[0]["fit_score"], 4) == 0.6158
+    assert round(results[1]["fit_score"], 4) == 0.4737
 
 
-def test_all_lower_is_better_scoring(db):
-    """All metrics are lower-is-better — higher raw scores should rank lower."""
+def test_all_legacy_lower_is_better_metadata_scoring(db):
+    """All scores are treated as benefit scores even with legacy metadata."""
     decision = make_decision(db)
     m1 = make_metric(db, "Cost", higher_is_better=False)
     m2 = make_metric(db, "Risk", higher_is_better=False)
@@ -167,15 +152,13 @@ def test_all_lower_is_better_scoring(db):
     db.commit()
     results = compute_alternative_fit_scores(decision.id, db)
     assert len(results) == 2
-    # Good: effective Cost=80, Risk=70 → numerator = 15000, denom=200, fit=0.7500
-    # Bad: effective Cost=20, Risk=10 → numerator = 3000, denom=200, fit=0.1500
-    assert results[0]["activity_name"] == "Good"
-    assert round(results[0]["fit_score"], 4) == 0.7500
-    assert round(results[1]["fit_score"], 4) == 0.1500
+    assert results[0]["activity_name"] == "Bad"
+    assert round(results[0]["fit_score"], 4) == 0.8500
+    assert round(results[1]["fit_score"], 4) == 0.2500
 
 
 def test_boundary_scores(db):
-    """Scores at 0 and 100 boundaries with mixed direction."""
+    """Scores at 0 and 100 boundaries with legacy direction metadata."""
     decision = make_decision(db)
     m1 = make_metric(db, "Cost", higher_is_better=False)
     m2 = make_metric(db, "Quality", higher_is_better=True)
@@ -185,10 +168,8 @@ def test_boundary_scores(db):
         [
             DecisionWeight(decision_id=decision.id, metric_id=m1.id, weight=100),
             DecisionWeight(decision_id=decision.id, metric_id=m2.id, weight=100),
-            # Best: Cost=0 (inverted to 100), Quality=100 → 20000/200/100 = 1.0
             AlternativeScore(activity_id=alt1.id, metric_id=m1.id, score=0),
             AlternativeScore(activity_id=alt1.id, metric_id=m2.id, score=100),
-            # Worst: Cost=100 (inverted to 0), Quality=0 → 0/200/100 = 0.0
             AlternativeScore(activity_id=alt2.id, metric_id=m1.id, score=100),
             AlternativeScore(activity_id=alt2.id, metric_id=m2.id, score=0),
         ]
@@ -196,12 +177,12 @@ def test_boundary_scores(db):
     db.commit()
     results = compute_alternative_fit_scores(decision.id, db)
     assert len(results) == 2
-    assert round(results[0]["fit_score"], 4) == 1.0
-    assert round(results[1]["fit_score"], 4) == 0.0
+    assert round(results[0]["fit_score"], 4) == 0.5
+    assert round(results[1]["fit_score"], 4) == 0.5
 
 
-def test_dimension_scores_inversion(db):
-    """Dimension scores should use effective (inverted) scores for lower-is-better metrics."""
+def test_dimension_scores_use_direct_benefit_scores(db):
+    """Dimension scores should use direct benefit-oriented scores."""
     from services.scoring import compute_dimension_scores
 
     decision = make_decision(db)
@@ -222,15 +203,11 @@ def test_dimension_scores_inversion(db):
     assert len(dim_scores) == 1
     fin = dim_scores[0]
     assert fin["dimension"] == "Financial"
-    # With inversion: Cost effective=70, Value effective=80
-    #   weighted avg = (70*80 + 80*60) / (80+60) = 10400/140 = 74.2857 → 74.3
-    # Without inversion: (30*80 + 80*60) / 140 = 7200/140 = 51.4
-    assert fin["score"] == 74.3
-    assert fin["score"] != 51.4  # would be without inversion
+    assert fin["score"] == 51.4
 
 
-def test_higher_is_better_map_missing_metric(db):
-    """Missing metric in higher_is_better_map defaults to True (higher-is-better)."""
+def test_missing_metric_row_still_scores_directly(db):
+    """Missing metric metadata does not affect direct benefit scoring."""
     decision = make_decision(db)
     m = make_metric(db, "Cost", higher_is_better=False)
     alt = make_activity(db, "Test", decision.id)
@@ -243,10 +220,7 @@ def test_higher_is_better_map_missing_metric(db):
 
     results = compute_alternative_fit_scores(decision.id, db)
     assert len(results) == 1
-    # Cost (known, lower_is_better=False): effective = 100-30 = 70
-    # fake_metric_id (no Metric row): defaults to higher_is_better=True, effective = 80
-    # numerator = 70*80 + 80*60 = 10400, denom = 140, fit = 10400/140/100 = 0.7429
-    assert round(results[0]["fit_score"], 4) == 0.7429
+    assert round(results[0]["fit_score"], 4) == 0.5143
 
 
 def test_perfect_score(db):
@@ -316,11 +290,11 @@ class TestFilterByThresholds:
     def test_all_pass(self, db):
         decision = make_decision(db)
         m = make_metric(db, "Cost")
-        alt = make_activity(db, "Cheap", decision.id)
+        alt = make_activity(db, "Good Fit", decision.id)
         db.add(DecisionWeight(decision_id=decision.id, metric_id=m.id, weight=100))
-        db.add(AlternativeScore(activity_id=alt.id, metric_id=m.id, score=30))
+        db.add(AlternativeScore(activity_id=alt.id, metric_id=m.id, score=80))
         decision.thresholds = json.dumps(
-            [{"metric_id": m.id, "operator": "<=", "value": 60}]
+            [{"metric_id": m.id, "operator": ">=", "value": 60}]
         )
         db.commit()
 
@@ -332,17 +306,17 @@ class TestFilterByThresholds:
     def test_one_fails_one_passes(self, db):
         decision = make_decision(db)
         m = make_metric(db, "Cost")
-        alt1 = make_activity(db, "Cheap", decision.id)
-        alt2 = make_activity(db, "Expensive", decision.id)
+        alt1 = make_activity(db, "Affordable", decision.id)
+        alt2 = make_activity(db, "Poor Fit", decision.id)
         db.add_all(
             [
                 DecisionWeight(decision_id=decision.id, metric_id=m.id, weight=100),
-                AlternativeScore(activity_id=alt1.id, metric_id=m.id, score=30),
-                AlternativeScore(activity_id=alt2.id, metric_id=m.id, score=80),
+                AlternativeScore(activity_id=alt1.id, metric_id=m.id, score=80),
+                AlternativeScore(activity_id=alt2.id, metric_id=m.id, score=30),
             ]
         )
         decision.thresholds = json.dumps(
-            [{"metric_id": m.id, "operator": "<=", "value": 60}]
+            [{"metric_id": m.id, "operator": ">=", "value": 60}]
         )
         db.commit()
 
@@ -350,17 +324,17 @@ class TestFilterByThresholds:
         assert result["all_passed"] is False
         assert len(result["passed"]) == 1
         assert len(result["failed"]) == 1
-        assert result["passed"][0]["activity_name"] == "Cheap"
-        assert result["failed"][0]["activity_name"] == "Expensive"
+        assert result["passed"][0]["activity_name"] == "Affordable"
+        assert result["failed"][0]["activity_name"] == "Poor Fit"
 
     def test_all_fail(self, db):
         decision = make_decision(db)
         m = make_metric(db, "Cost")
-        alt = make_activity(db, "Expensive", decision.id)
+        alt = make_activity(db, "Poor Fit", decision.id)
         db.add(DecisionWeight(decision_id=decision.id, metric_id=m.id, weight=100))
-        db.add(AlternativeScore(activity_id=alt.id, metric_id=m.id, score=80))
+        db.add(AlternativeScore(activity_id=alt.id, metric_id=m.id, score=30))
         decision.thresholds = json.dumps(
-            [{"metric_id": m.id, "operator": "<=", "value": 60}]
+            [{"metric_id": m.id, "operator": ">=", "value": 60}]
         )
         db.commit()
 
@@ -384,8 +358,8 @@ class TestFilterByThresholds:
         assert len(result["failed"]) == 0
         assert len(result["survivor_results"]) == 1
 
-    def test_lower_is_better_direction(self, db):
-        """Cost <= 30 with score 20 should pass; score 50 should fail."""
+    def test_benefit_oriented_minimum_threshold(self, db):
+        """Cost >= 30 with score 50 should pass; score 20 should fail."""
         decision = make_decision(db)
         m = make_metric(db, "Cost")
         alt_good = make_activity(db, "LowCost", decision.id)
@@ -393,12 +367,12 @@ class TestFilterByThresholds:
         db.add_all(
             [
                 DecisionWeight(decision_id=decision.id, metric_id=m.id, weight=100),
-                AlternativeScore(activity_id=alt_good.id, metric_id=m.id, score=20),
-                AlternativeScore(activity_id=alt_bad.id, metric_id=m.id, score=50),
+                AlternativeScore(activity_id=alt_good.id, metric_id=m.id, score=50),
+                AlternativeScore(activity_id=alt_bad.id, metric_id=m.id, score=20),
             ]
         )
         decision.thresholds = json.dumps(
-            [{"metric_id": m.id, "operator": "<=", "value": 30}]
+            [{"metric_id": m.id, "operator": ">=", "value": 30}]
         )
         db.commit()
 

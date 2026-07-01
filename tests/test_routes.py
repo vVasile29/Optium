@@ -252,6 +252,125 @@ def test_full_decision_flow(client, db):
     assert "metric_names" in api_data
 
 
+def test_api_score_rejects_foreign_activity_before_deleting_existing_scores(client, db):
+    from models import AlternativeScore
+
+    decision_id, metric_id = _create_decision_with_metric(client, db)
+    other_decision_id, _ = _create_decision_with_metric(client, db, query="Train or Bus?")
+
+    activity_id = client.get(f"/api/decisions/{decision_id}").json()["activities"][0]["id"]
+    other_activity_id = client.get(f"/api/decisions/{other_decision_id}").json()[
+        "activities"
+    ][0]["id"]
+
+    valid = client.post(
+        f"/api/decisions/{decision_id}/score",
+        json={"scores": [{"activity_id": activity_id, "metric_id": metric_id, "score": 70}]},
+    )
+    assert valid.status_code == 200
+    assert db.query(AlternativeScore).count() == 1
+
+    invalid = client.post(
+        f"/api/decisions/{decision_id}/score",
+        json={
+            "scores": [
+                {"activity_id": other_activity_id, "metric_id": metric_id, "score": 80}
+            ]
+        },
+    )
+    assert invalid.status_code == 422
+    assert db.query(AlternativeScore).count() == 1
+
+
+def test_api_score_rejects_unselected_metric(client, db):
+    decision_id, metric_id = _create_decision_with_metric(client, db)
+    activity_id = client.get(f"/api/decisions/{decision_id}").json()["activities"][0]["id"]
+    unselected_metric = db.query(Metric).filter(Metric.id != metric_id).first()
+    assert unselected_metric is not None
+
+    response = client.post(
+        f"/api/decisions/{decision_id}/score",
+        json={
+            "scores": [
+                {
+                    "activity_id": activity_id,
+                    "metric_id": unselected_metric.id,
+                    "score": 70,
+                }
+            ]
+        },
+    )
+
+    assert response.status_code == 422
+
+
+@pytest.mark.parametrize(
+    "score_payload",
+    [
+        {},
+        {"score": "70"},
+        {"score": -1},
+        {"score": 101},
+    ],
+)
+def test_api_score_rejects_malformed_score_values(client, db, score_payload):
+    decision_id, metric_id = _create_decision_with_metric(client, db)
+    activity_id = client.get(f"/api/decisions/{decision_id}").json()["activities"][0]["id"]
+    payload = {"activity_id": activity_id, "metric_id": metric_id, **score_payload}
+
+    response = client.post(
+        f"/api/decisions/{decision_id}/score",
+        json={"scores": [payload]},
+    )
+
+    assert response.status_code == 422
+
+
+def test_api_score_rejects_non_finite_score(client, db):
+    decision_id, metric_id = _create_decision_with_metric(client, db)
+    activity_id = client.get(f"/api/decisions/{decision_id}").json()["activities"][0]["id"]
+
+    response = client.post(
+        f"/api/decisions/{decision_id}/score",
+        content=(
+            '{"scores":[{"activity_id":%d,"metric_id":%d,"score":NaN}]}'
+            % (activity_id, metric_id)
+        ),
+        headers={"content-type": "application/json"},
+    )
+
+    assert response.status_code == 422
+
+
+def test_api_score_rejects_duplicate_score_entries_before_deleting_existing_scores(
+    client, db
+):
+    from models import AlternativeScore
+
+    decision_id, metric_id = _create_decision_with_metric(client, db)
+    activity_id = client.get(f"/api/decisions/{decision_id}").json()["activities"][0]["id"]
+
+    valid = client.post(
+        f"/api/decisions/{decision_id}/score",
+        json={"scores": [{"activity_id": activity_id, "metric_id": metric_id, "score": 70}]},
+    )
+    assert valid.status_code == 200
+    assert db.query(AlternativeScore).count() == 1
+
+    duplicate = client.post(
+        f"/api/decisions/{decision_id}/score",
+        json={
+            "scores": [
+                {"activity_id": activity_id, "metric_id": metric_id, "score": 80},
+                {"activity_id": activity_id, "metric_id": metric_id, "score": 90},
+            ]
+        },
+    )
+
+    assert duplicate.status_code == 422
+    assert db.query(AlternativeScore).count() == 1
+
+
 def test_decide_empty_query(client, db):
     """Test /api/decide with empty query returns error."""
     response = client.post("/api/decide", json={"q": ""})
@@ -529,6 +648,20 @@ def test_decision_result_threshold_panel_renders(client, db):
     data = resp.json()
     assert "decision" in data
     assert "results" in data
+    assert data["threshold_criteria"]
+    assert all(tc["operator"] == ">=" for tc in data["threshold_criteria"])
+
+
+def test_seeded_cost_risk_time_are_benefit_oriented(db):
+    metrics = {
+        m.name: m
+        for m in db.query(Metric)
+        .filter(Metric.name.in_(["Cost", "Risk", "Time Required"]))
+        .all()
+    }
+    assert metrics["Cost"].higher_is_better is True
+    assert metrics["Risk"].higher_is_better is True
+    assert metrics["Time Required"].higher_is_better is True
 
 
 def test_decision_apply_thresholds_valid(client, db):
@@ -550,7 +683,7 @@ def test_decision_apply_thresholds_valid(client, db):
     resp = client.post(
         f"/api/decisions/{decision_id}/thresholds",
         json={
-            "thresholds": [{"metric_id": metric_id, "operator": "<=", "value": 60.0}]
+            "thresholds": [{"metric_id": metric_id, "operator": ">=", "value": 60.0}]
         },
     )
     assert resp.status_code == 200
@@ -566,7 +699,7 @@ def test_decision_apply_thresholds_valid(client, db):
     stored = loads(decision.thresholds)
     assert len(stored) >= 1
     assert stored[0]["metric_id"] == metric_id
-    assert stored[0]["operator"] == "<="
+    assert stored[0]["operator"] == ">="
     assert stored[0]["value"] == 60.0
 
     # Fetch result page via API
@@ -576,13 +709,30 @@ def test_decision_apply_thresholds_valid(client, db):
     assert "filter_result" in result_data
 
 
+def test_decision_apply_thresholds_defaults_to_minimum_operator(client, db):
+    decision_id, metric_id = _create_decision_with_metric(client, db)
+
+    resp = client.post(
+        f"/api/decisions/{decision_id}/thresholds",
+        json={"thresholds": [{"metric_id": metric_id, "value": 60.0}]},
+    )
+    assert resp.status_code == 200
+
+    from json import loads
+    from models import Decision
+
+    decision = db.query(Decision).filter(Decision.id == decision_id).first()
+    stored = loads(decision.thresholds)
+    assert stored[0]["operator"] == ">="
+
+
 def test_decision_apply_thresholds_invalid_range(client, db):
     """POST threshold value 150 → error, NOT stored."""
     decision_id, metric_id = _create_decision_with_metric(client, db)
 
     resp = client.post(
         f"/api/decisions/{decision_id}/thresholds",
-        json={"thresholds": [{"metric_id": metric_id, "operator": "<=", "value": 150}]},
+        json={"thresholds": [{"metric_id": metric_id, "operator": ">=", "value": 150}]},
     )
     assert resp.status_code == 422
     data = resp.json()
@@ -603,7 +753,7 @@ def test_decision_apply_thresholds_invalid_non_numeric(client, db):
     resp = client.post(
         f"/api/decisions/{decision_id}/thresholds",
         json={
-            "thresholds": [{"metric_id": metric_id, "operator": "<=", "value": "abc"}]
+            "thresholds": [{"metric_id": metric_id, "operator": ">=", "value": "abc"}]
         },
     )
     assert resp.status_code == 422
@@ -617,6 +767,49 @@ def test_decision_apply_thresholds_invalid_non_numeric(client, db):
     assert decision.thresholds is None or decision.thresholds == "null"
 
 
+@pytest.mark.parametrize(
+    "threshold",
+    [
+        {"operator": ">=", "value": 60},
+        {"metric_id": "1", "operator": ">=", "value": 60},
+        {"metric_id": 1, "operator": "=", "value": 60},
+        {"metric_id": 1, "operator": ">=", "value": "nan"},
+        {"metric_id": 1, "operator": ">=", "value": "inf"},
+    ],
+)
+def test_decision_apply_thresholds_rejects_malformed_thresholds(
+    client, db, threshold
+):
+    decision_id, metric_id = _create_decision_with_metric(client, db)
+    threshold = dict(threshold)
+    if threshold.get("metric_id") == 1:
+        threshold["metric_id"] = metric_id
+
+    resp = client.post(
+        f"/api/decisions/{decision_id}/thresholds",
+        json={"thresholds": [threshold]},
+    )
+
+    assert resp.status_code == 422
+
+
+def test_decision_apply_thresholds_rejects_unselected_metric(client, db):
+    decision_id, metric_id = _create_decision_with_metric(client, db)
+    unselected_metric = db.query(Metric).filter(Metric.id != metric_id).first()
+    assert unselected_metric is not None
+
+    resp = client.post(
+        f"/api/decisions/{decision_id}/thresholds",
+        json={
+            "thresholds": [
+                {"metric_id": unselected_metric.id, "operator": ">=", "value": 60}
+            ]
+        },
+    )
+
+    assert resp.status_code == 422
+
+
 def test_decision_clear_thresholds(client, db):
     """POST /thresholds/clear removes filters."""
     decision_id, metric_id = _create_decision_with_metric(client, db)
@@ -628,7 +821,7 @@ def test_decision_clear_thresholds(client, db):
     import json
 
     decision.thresholds = json.dumps(
-        [{"metric_id": metric_id, "operator": "<=", "value": 60.0}]
+        [{"metric_id": metric_id, "operator": ">=", "value": 60.0}]
     )
     db.commit()
 
@@ -651,7 +844,7 @@ def test_decision_thresholds_no_scores(client, db):
     resp = client.post(
         f"/api/decisions/{decision_id}/thresholds",
         json={
-            "thresholds": [{"metric_id": metric_id, "operator": "<=", "value": 60.0}]
+            "thresholds": [{"metric_id": metric_id, "operator": ">=", "value": 60.0}]
         },
     )
     assert resp.status_code == 200
@@ -711,10 +904,10 @@ def test_decision_result_robustness_uses_saved_threshold_survivors(client, db):
     db.flush()
     for score in winner_scores:
         mid = score.metric_id
-        db.add(AlternativeScore(activity_id=third.id, metric_id=mid, score=95))
+        db.add(AlternativeScore(activity_id=third.id, metric_id=mid, score=10))
 
     stored = db.query(Decision).filter(Decision.id == decision.id).first()
-    stored.thresholds = '[{"metric_id": %d, "operator": "<=", "value": 80}]' % metric_id
+    stored.thresholds = '[{"metric_id": %d, "operator": ">=", "value": 80}]' % metric_id
     db.commit()
 
     response = client.get(f"/api/decisions/{decision.id}")
@@ -746,7 +939,7 @@ def test_decision_result_robustness_handles_no_threshold_survivors(client, db):
     metric_id = score.metric_id
 
     stored = db.query(Decision).filter(Decision.id == decision.id).first()
-    stored.thresholds = '[{"metric_id": %d, "operator": "<=", "value": 10}]' % metric_id
+    stored.thresholds = '[{"metric_id": %d, "operator": ">=", "value": 95}]' % metric_id
     db.commit()
 
     response = client.get(f"/api/decisions/{decision.id}")
@@ -771,14 +964,14 @@ def test_decision_invalid_threshold_via_api_uses_saved_threshold_survivors(clien
     metric_id = score.metric_id
 
     stored = db.query(Decision).filter(Decision.id == decision.id).first()
-    stored.thresholds = '[{"metric_id": %d, "operator": "<=", "value": 10}]' % metric_id
+    stored.thresholds = '[{"metric_id": %d, "operator": ">=", "value": 95}]' % metric_id
     db.commit()
 
     # Attempt invalid threshold via API — should reject
     response = client.post(
         f"/api/decisions/{decision.id}/thresholds",
         json={
-            "thresholds": [{"metric_id": metric_id, "operator": "<=", "value": "not-a-number"}]
+            "thresholds": [{"metric_id": metric_id, "operator": ">=", "value": "not-a-number"}]
         },
     )
     assert response.status_code == 422
@@ -789,6 +982,100 @@ def test_decision_invalid_threshold_via_api_uses_saved_threshold_survivors(clien
     data = result.json()
     assert data["filter_result"]["survivor_results"] == []
     assert data["robustness"] is None
+
+
+@pytest.mark.parametrize(
+    "saved_thresholds",
+    [
+        '["bad"]',
+        "[{}]",
+        '[{"metric_id": SELECTED_METRIC, "operator": ">=", "value": "abc"}]',
+        '[{"metric_id": SELECTED_METRIC, "operator": "=", "value": 60}]',
+        '[{"metric_id": UNSELECTED_METRIC, "operator": ">=", "value": 60}]',
+        '[{"metric_id": SELECTED_METRIC, "operator": ">=", "value": NaN}]',
+        '[{"metric_id": SELECTED_METRIC, "operator": ">=", "value": Infinity}]',
+    ],
+)
+def test_decision_result_skips_malformed_persisted_thresholds(
+    client, db, saved_thresholds
+):
+    decision = _seed_scored_decision(db, "choose")
+
+    from models import AlternativeScore, Decision, DecisionWeight, Metric
+
+    selected_metric_id = (
+        db.query(AlternativeScore)
+        .filter(AlternativeScore.activity_id == decision.activities[0].id)
+        .first()
+        .metric_id
+    )
+    selected_metric_ids = {
+        weight.metric_id
+        for weight in db.query(DecisionWeight)
+        .filter(DecisionWeight.decision_id == decision.id)
+        .all()
+    }
+    unselected_metric = db.query(Metric).filter(~Metric.id.in_(selected_metric_ids)).first()
+    assert unselected_metric is not None
+
+    saved_thresholds = saved_thresholds.replace(
+        "UNSELECTED_METRIC", str(unselected_metric.id)
+    )
+    saved_thresholds = saved_thresholds.replace(
+        "SELECTED_METRIC", str(selected_metric_id)
+    )
+
+    stored = db.query(Decision).filter(Decision.id == decision.id).first()
+    stored.thresholds = saved_thresholds
+    db.commit()
+
+    response = client.get(f"/api/decisions/{decision.id}")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["filter_result"] is None
+    assert data["thresholds"] == []
+
+
+@pytest.mark.parametrize(
+    "saved_thresholds",
+    [
+        '["bad"]',
+        "[{}]",
+        '[{"metric_id": SELECTED_METRIC, "operator": ">=", "value": "abc"}]',
+        '[{"metric_id": SELECTED_METRIC, "operator": "=", "value": 60}]',
+        '[{"metric_id": SELECTED_METRIC, "operator": ">=", "value": 101}]',
+        '[{"operator": ">=", "value": 60}]',
+        '[{"metric_id": SELECTED_METRIC, "operator": ">=", "value": NaN}]',
+        '[{"metric_id": SELECTED_METRIC, "operator": ">=", "value": Infinity}]',
+    ],
+)
+def test_export_markdown_skips_malformed_persisted_thresholds(
+    client, db, saved_thresholds
+):
+    decision = _seed_scored_decision(db, "choose")
+
+    from models import AlternativeScore, Decision
+
+    selected_metric_id = (
+        db.query(AlternativeScore)
+        .filter(AlternativeScore.activity_id == decision.activities[0].id)
+        .first()
+        .metric_id
+    )
+    saved_thresholds = saved_thresholds.replace(
+        "SELECTED_METRIC", str(selected_metric_id)
+    )
+
+    stored = db.query(Decision).filter(Decision.id == decision.id).first()
+    stored.thresholds = saved_thresholds
+    db.commit()
+
+    response = client.get(f"/api/decisions/{decision.id}/export-markdown")
+
+    assert response.status_code == 200
+    assert "Decision Brief" in response.text
+    assert "Threshold Filters" not in response.text
 
 
 # ── Markdown export + robustness + slider polish tests ──
@@ -917,8 +1204,9 @@ def test_api_decision_rows_expose_sensitivity_scoring_fields(client, db):
     """Decision detail rows include metric direction and decision-level weights."""
     from models import Activity, AlternativeScore, Decision, DecisionWeight, Metric
 
-    metric = db.query(Metric).filter(Metric.higher_is_better.is_(False)).first()
-    assert metric is not None
+    metric = Metric(name="Legacy Direction", category="General", higher_is_better=False)
+    db.add(metric)
+    db.flush()
 
     decision = Decision(query="Sensitivity parity", category="General", mode="choose")
     db.add(decision)
@@ -943,4 +1231,5 @@ def test_api_decision_rows_expose_sensitivity_scoring_fields(client, db):
     assert row["higher_is_better"] is False
     # Decision-level weight: both activities use the same weight
     assert row["weight"] == 80
-    assert data["results"][0]["fit_score"] == 0.9
+    assert data["results"][0]["activity_name"] == "Second"
+    assert data["results"][0]["fit_score"] == 0.3

@@ -4,6 +4,7 @@ Deterministic MCDA decision engine. All endpoints under /api/*.
 """
 
 import json
+import math
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
@@ -19,6 +20,7 @@ from services.scoring import (
     compute_dimension_scores,
     filter_by_thresholds,
     gap_analysis,
+    sanitize_persisted_thresholds,
 )
 
 router = APIRouter(prefix="/api", tags=["api"])
@@ -34,13 +36,33 @@ def _robustness_for_results(
     return build_decision_robustness(decision_id, db, activity_ids=activity_ids)
 
 
-def _parse_thresholds(decision: Decision) -> list:
-    if not decision.thresholds:
-        return []
-    try:
-        return json.loads(decision.thresholds)
-    except (json.JSONDecodeError, TypeError):
-        return []
+def _parse_thresholds(decision: Decision, db: Session) -> list:
+    return sanitize_persisted_thresholds(decision.id, db)
+
+
+def _validate_metric_id(value, selected_metric_ids: set[int], label: str) -> int:
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise HTTPException(status_code=422, detail=f"{label} must be an integer")
+    if value not in selected_metric_ids:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Metric {value} is not selected for this decision",
+        )
+    return value
+
+
+def _validate_score_value(value, label: str) -> float:
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        raise HTTPException(status_code=422, detail=f"{label} must be numeric")
+    value_float = float(value)
+    if not math.isfinite(value_float):
+        raise HTTPException(status_code=422, detail=f"{label} must be finite")
+    if value_float < 0.0 or value_float > 100.0:
+        raise HTTPException(
+            status_code=422,
+            detail=f"{label} {value_float} is outside the 0–100 scale",
+        )
+    return value_float
 
 
 def _build_decision_detail(decision_id: int, db: Session) -> dict:
@@ -94,7 +116,7 @@ def _build_decision_detail(decision_id: int, db: Session) -> dict:
         "gap_analysis": None,
         "filter_result": None,
         "threshold_criteria": [],
-        "thresholds": _parse_thresholds(decision),
+        "thresholds": [],
     }
 
     if not activities or not metrics:
@@ -173,7 +195,8 @@ def _build_decision_detail(decision_id: int, db: Session) -> dict:
     result["significance"] = None
 
     # Threshold filtering
-    thresholds = _parse_thresholds(decision)
+    thresholds = _parse_thresholds(decision, db)
+    result["thresholds"] = thresholds
     if thresholds:
         filter_result = filter_by_thresholds(decision_id, db)
         result["filter_result"] = filter_result
@@ -181,26 +204,26 @@ def _build_decision_detail(decision_id: int, db: Session) -> dict:
             decision_id, db, filter_result.get("survivor_results", [])
         )
 
-        # Build threshold_criteria
-        threshold_criteria = []
-        existing_by_metric = {}
-        for t in thresholds:
-            if isinstance(t, dict) and "metric_id" in t:
-                existing_by_metric[t["metric_id"]] = t
+    # Build threshold_criteria
+    threshold_criteria = []
+    existing_by_metric = {}
+    for t in thresholds:
+        if isinstance(t, dict) and "metric_id" in t:
+            existing_by_metric[t["metric_id"]] = t
 
-        if metric_ids:
-            metrics_in_use = db.query(Metric).filter(Metric.id.in_(metric_ids)).all()
-            for m in metrics_in_use:
-                existing_t = existing_by_metric.get(m.id, {})
-                threshold_criteria.append(
-                    {
-                        "id": m.id,
-                        "name": m.name,
-                        "operator": existing_t.get("operator", "<="),
-                        "value": existing_t.get("value", ""),
-                    }
-                )
-        result["threshold_criteria"] = threshold_criteria
+    if metric_ids:
+        metrics_in_use = db.query(Metric).filter(Metric.id.in_(metric_ids)).all()
+        for m in metrics_in_use:
+            existing_t = existing_by_metric.get(m.id, {})
+            threshold_criteria.append(
+                {
+                    "id": m.id,
+                    "name": m.name,
+                    "operator": existing_t.get("operator", ">="),
+                    "value": existing_t.get("value", ""),
+                }
+            )
+    result["threshold_criteria"] = threshold_criteria
 
     return result
 
@@ -439,19 +462,63 @@ def score_decision(
     if not decision:
         raise HTTPException(status_code=404, detail="Decision not found")
 
-    scores_input: list[dict] = body.get("scores", [])
+    scores_input = body.get("scores", [])
 
     if not scores_input:
         raise HTTPException(status_code=422, detail="At least one score is required")
+    if not isinstance(scores_input, list):
+        raise HTTPException(status_code=422, detail="Scores must be a list")
 
     activities = db.query(Activity).filter(Activity.decision_id == decision_id).all()
+    activity_ids = {activity.id for activity in activities}
+    selected_metric_ids = {
+        dw.metric_id
+        for dw in db.query(DecisionWeight)
+        .filter(DecisionWeight.decision_id == decision_id)
+        .all()
+    }
+
+    validated_scores = []
+    seen_scores = set()
+    for s in scores_input:
+        if not isinstance(s, dict):
+            raise HTTPException(status_code=422, detail="Each score must be an object")
+        if "activity_id" not in s:
+            raise HTTPException(status_code=422, detail="Score activity_id is required")
+        if "metric_id" not in s:
+            raise HTTPException(status_code=422, detail="Score metric_id is required")
+        if "score" not in s:
+            raise HTTPException(status_code=422, detail="Score value is required")
+
+        activity_id = s["activity_id"]
+        if not isinstance(activity_id, int) or isinstance(activity_id, bool):
+            raise HTTPException(status_code=422, detail="activity_id must be an integer")
+        if activity_id not in activity_ids:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Activity {activity_id} does not belong to this decision",
+            )
+
+        metric_id = _validate_metric_id(s["metric_id"], selected_metric_ids, "metric_id")
+        score = _validate_score_value(s["score"], "Score")
+        score_key = (activity_id, metric_id)
+        if score_key in seen_scores:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Duplicate score for activity {activity_id} and metric {metric_id}",
+            )
+        seen_scores.add(score_key)
+        validated_scores.append(
+            {"activity_id": activity_id, "metric_id": metric_id, "score": score}
+        )
+
     for activity in activities:
         db.query(AlternativeScore).filter(
             AlternativeScore.activity_id == activity.id
         ).delete()
     db.flush()
 
-    for s in scores_input:
+    for s in validated_scores:
         alt_score = AlternativeScore(
             activity_id=s["activity_id"],
             metric_id=s["metric_id"],
@@ -513,13 +580,29 @@ def apply_thresholds(
     if not decision:
         raise HTTPException(status_code=404, detail="Decision not found")
 
-    thresholds_input: list[dict] = body.get("thresholds", [])
+    thresholds_input = body.get("thresholds", [])
+    if not isinstance(thresholds_input, list):
+        raise HTTPException(status_code=422, detail="Thresholds must be a list")
+
+    selected_metric_ids = {
+        dw.metric_id
+        for dw in db.query(DecisionWeight)
+        .filter(DecisionWeight.decision_id == decision_id)
+        .all()
+    }
 
     valid_operators = {"<=", ">=", "<", ">"}
     validated = []
     for t in thresholds_input:
-        operator = t.get("operator", "<=")
+        if not isinstance(t, dict):
+            raise HTTPException(status_code=422, detail="Each threshold must be an object")
+        if "metric_id" not in t:
+            raise HTTPException(status_code=422, detail="Threshold metric_id is required")
+        operator = t.get("operator", ">=")
         value = t.get("value")
+        metric_id = _validate_metric_id(
+            t.get("metric_id"), selected_metric_ids, "metric_id"
+        )
 
         if operator not in valid_operators:
             raise HTTPException(
@@ -534,6 +617,8 @@ def apply_thresholds(
             raise HTTPException(
                 status_code=422, detail=f"Invalid threshold value '{value}'"
             )
+        if not math.isfinite(value_float):
+            raise HTTPException(status_code=422, detail="Threshold value must be finite")
         if value_float < 0.0 or value_float > 100.0:
             raise HTTPException(
                 status_code=422,
@@ -541,7 +626,7 @@ def apply_thresholds(
             )
         validated.append(
             {
-                "metric_id": t["metric_id"],
+                "metric_id": metric_id,
                 "operator": operator,
                 "value": value_float,
             }
@@ -572,7 +657,7 @@ def apply_thresholds(
                 {
                     "id": m.id,
                     "name": m.name,
-                    "operator": existing_t.get("operator", "<="),
+                    "operator": existing_t.get("operator", ">="),
                     "value": existing_t.get("value", ""),
                 }
             )

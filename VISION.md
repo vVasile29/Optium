@@ -44,10 +44,10 @@ pre-seeded, not created separately for each decision.
 
 | Dimension | Metrics | Direction |
 |-----------|---------|-----------|
-| Financial | Cost, Value | Lower Cost, higher Value |
+| Financial | Cost, Value | Higher is better (Cost means affordability / cost fit) |
 | Quality | Quality, Performance | Higher is better |
-| Time | Time Required, Efficiency | Lower Time Required, higher Efficiency |
-| Risk | Risk, Safety | Lower Risk, higher Safety |
+| Time | Time Required, Efficiency | Higher is better (Time Required means time fit / speed) |
+| Risk | Risk, Safety | Higher is better (Risk means low-risk fit) |
 | Experience | Enjoyment, Satisfaction | Higher is better |
 | Convenience | Convenience, Accessibility | Higher is better |
 
@@ -70,12 +70,12 @@ model is inspectable before it produces an answer.
 ### Score on a 0-100 Scale
 
 Alternatives are scored against selected metrics with sliders. Weights and scores
-both use a 0-100 scale.
+both use a 0-100 scale, and every score is benefit-oriented: higher is better.
 
 ### Results and Threshold Filters
 
 Results show weighted fit scores, radar charts, and detailed score tables. The
-result page can also apply threshold filters, such as `Cost <= 60` or
+result page can also apply threshold filters, such as `Cost >= 60` or
 `Safety >= 80`, to separate passing and failing alternatives. Threshold filters
 operate on user-entered scores; they do not fetch external facts.
 

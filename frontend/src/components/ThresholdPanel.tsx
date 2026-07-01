@@ -47,7 +47,7 @@ export default function ThresholdPanel({
     try {
       const thresholds = thresholdCriteria.map((t) => ({
         metric_id: t.id,
-        operator: operators[t.id] || "<=",
+        operator: operators[t.id] || ">=",
         value: parseFloat(values[t.id] || "0"),
       }));
       await api.applyThresholds(decisionId, thresholds);
@@ -99,7 +99,7 @@ export default function ThresholdPanel({
             <div key={tc.id} className="flex items-center gap-2">
               <span className="w-32 text-sm font-medium">{tc.name}</span>
               <Select
-                value={operators[tc.id] || "<="}
+                value={operators[tc.id] || ">="}
                 onValueChange={(v) =>
                   setOperators((prev) => ({ ...prev, [tc.id]: v }))
                 }
@@ -108,8 +108,8 @@ export default function ThresholdPanel({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="<=">≤</SelectItem>
                   <SelectItem value=">=">≥</SelectItem>
+                  <SelectItem value="<=">≤</SelectItem>
                   <SelectItem value="<">&lt;</SelectItem>
                   <SelectItem value=">">&gt;</SelectItem>
                 </SelectContent>

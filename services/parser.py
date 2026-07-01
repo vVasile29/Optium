@@ -138,7 +138,7 @@ def extract_thresholds(query: str) -> list[dict]:
     """Detects per-criterion threshold constraints from free text. (Backward-compatible)
 
     Patterns:
-      - "Cost <= 60", "cost < 30" (metric + operator + value)
+      - "Cost >= 60", "cost > 30" (metric + operator + value)
       - "at least 70 Quality", "minimum quality 80" (keyword + value + metric)
 
     Operator aliases:
@@ -148,7 +148,7 @@ def extract_thresholds(query: str) -> list[dict]:
       - "at most", "maximum", "max": mapped to "<="
 
     Returns: [
-        {"metric_name": "Cost", "operator": "<=", "value": 60.0},
+        {"metric_name": "Cost", "operator": ">=", "value": 60.0},
         ...
     ]
     """
@@ -157,7 +157,7 @@ def extract_thresholds(query: str) -> list[dict]:
     metric_names = [m["name"] for m in UNIVERSAL_METRICS]
 
     patterns = [
-        # Pattern 1: "metric operator value" (e.g., "Cost <= 60")
+        # Pattern 1: "metric operator value" (e.g., "Cost >= 60")
         r"(?P<metric1>[A-Za-z ]+?)\s*(?P<op1><=|>=|<|>)\s*(?P<val1>\d+(?:\.\d+)?)",
         # Pattern 2: "at least / at most / minimum / maximum value metric" (e.g., "at least 80 quality")
         r"(?P<keyword>at\s+least|at\s+most|minimum|maximum|min|max)\s+(?P<val2>\d+(?:\.\d+)?)\s+(?P<metric2>[A-Za-z ]+)",
@@ -250,7 +250,7 @@ def extract_thresholds_detailed(query: str) -> dict:
 
     Returns: {
         "valid": [
-            {"metric_name": "Cost", "operator": "<=", "value": 60.0},
+            {"metric_name": "Cost", "operator": ">=", "value": 60.0},
         ],
         "unknown": [
             {"raw_text": "popularity > 100", "metric_name": "popularity",
@@ -268,7 +268,7 @@ def extract_thresholds_detailed(query: str) -> dict:
 
     # Patterns with optional % suffix
     patterns = [
-        # Pattern 1: "metric operator value" (e.g., "Cost <= 60%")
+        # Pattern 1: "metric operator value" (e.g., "Cost >= 60%")
         r"(?P<metric1>[A-Za-z ]+?)\s*(?P<op1><=|>=|<|>)\s*(?P<val1>\d+(?:\.\d+)?)\s*%?",
         # Pattern 2: "at least / at most / minimum / maximum value metric" (e.g., "at least 80% quality")
         r"(?P<keyword>at\s+least|at\s+most|minimum|maximum|min|max)\s+(?P<val2>\d+(?:\.\d+)?)\s*%?\s+(?P<metric2>[A-Za-z ]+)",

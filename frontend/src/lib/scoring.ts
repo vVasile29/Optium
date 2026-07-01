@@ -27,8 +27,8 @@ export function filterResultsToSurvivors(
 /**
  * Recompute fit scores client-side given adjusted weights.
  * Used for sensitivity analysis in Results.
- * Pass `metrics` to map metric names to proper metric_ids/directions when rows
- * come from older API responses.
+ * Pass `metrics` to map metric names to proper metric_ids when rows come from
+ * older API responses.
  */
 export function recomputeFitScores(
   activities: Activity[],
@@ -54,13 +54,11 @@ export function recomputeFitScores(
     for (const row of rows) {
       const metric = metricByName[row.metric_name];
       const metricId = row.metric_id ?? metric?.id ?? 0;
-      const higherIsBetter = row.higher_is_better ?? metric?.higher_is_better ?? true;
       const baseWeight = row.weight;
       if (baseWeight === undefined) continue;
       const weight = metricWeightOverrides[row.metric_name] ?? baseWeight;
       const score = row.scores[act.id] ?? 0;
-      const effectiveScore = higherIsBetter ? score : 100 - score;
-      numerator += effectiveScore * weight;
+      numerator += score * weight;
       denominator += weight;
       weightedScores.push({ metric_id: metricId, score, weight });
     }

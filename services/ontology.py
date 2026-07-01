@@ -29,9 +29,9 @@ UNIVERSAL_DIMENSIONS = [
         "metrics": [
             {
                 "name": "Cost",
-                "description": "Total financial cost or investment required",
+                "description": "Cost fit and affordability",
                 "default_weight": 90,
-                "higher_is_better": False,
+                "higher_is_better": True,
             },
             {
                 "name": "Value",
@@ -92,9 +92,9 @@ UNIVERSAL_DIMENSIONS = [
         "metrics": [
             {
                 "name": "Time Required",
-                "description": "Amount of time needed",
+                "description": "Time fit, speed, and schedule compatibility",
                 "default_weight": 70,
-                "higher_is_better": False,
+                "higher_is_better": True,
             },
             {
                 "name": "Efficiency",
@@ -124,9 +124,9 @@ UNIVERSAL_DIMENSIONS = [
         "metrics": [
             {
                 "name": "Risk",
-                "description": "Level of risk or potential downsides",
+                "description": "Low-risk fit and downside protection",
                 "default_weight": 80,
-                "higher_is_better": False,
+                "higher_is_better": True,
             },
             {
                 "name": "Safety",

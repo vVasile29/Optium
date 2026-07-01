@@ -60,10 +60,10 @@ metrics. Metrics are global and shared — no per-decision criteria creation.
 
 | Dimension | Metrics | Direction |
 |---|---|---|
-| Financial | Cost, Value | Lower Cost, higher Value |
+| Financial | Cost, Value | Higher is better (Cost means affordability / cost fit) |
 | Quality | Quality, Performance | Higher is better |
-| Time | Time Required, Efficiency | Lower Time Required, higher Efficiency |
-| Risk | Risk, Safety | Lower Risk, higher Safety |
+| Time | Time Required, Efficiency | Higher is better (Time Required means time fit / speed) |
+| Risk | Risk, Safety | Higher is better (Risk means low-risk fit) |
 | Experience | Enjoyment, Satisfaction | Higher is better |
 | Convenience | Convenience, Accessibility | Higher is better |
 
@@ -76,18 +76,16 @@ alternatives. The scoring formula is a weighted additive MCDA model:
 fit = Σ(score[criterion] × weight[criterion]) / Σ(weight[criterion]) / 100.0
 ```
 
-Lower-is-better metrics are inverted before aggregation. Scores and weights
-both use a 0–100 granular scale.
+Scores are benefit-oriented: higher is always better. Scores and weights both
+use a 0–100 granular scale.
 
 ### 4. Results, Thresholds, and Robustness
 
 - **Radar chart** — visualize how alternatives compare across all criteria.
-- **Post-hoc threshold filters** — apply must-have cutoffs (e.g. `Cost <= 60`,
+- **Post-hoc threshold filters** — apply must-have cutoffs (e.g. `Cost >= 60`,
   `Safety >= 80`) after scoring to separate passing and failing alternatives.
-  Thresholds operate on the raw (non-inverted) user-entered scores — the
-  score you see on the slider is the score compared against the threshold.
-  Inversion for lower-is-better metrics only happens inside fit-score
-  computation, not during threshold filtering.
+  Thresholds operate on the displayed user-entered benefit scores — the score
+  you see on the slider is the score compared against the threshold.
 - **Robustness analysis** — Monte Carlo sensitivity analysis that perturbs
   weights and scores within a plausible range, then reports how often the
   ranking holds. See [`docs/ROBUSTNESS.md`](docs/ROBUSTNESS.md) for the full

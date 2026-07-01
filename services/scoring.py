@@ -1,11 +1,63 @@
 import json
 import logging
+import math
 from sqlalchemy.orm import Session
 
 from models import DecisionWeight
 
 
 # ── Threshold-based elimination (Elimination by Aspects) ──
+
+
+def sanitize_persisted_thresholds(decision_id: int, db: Session) -> list[dict]:
+    """Return valid saved thresholds for a decision, skipping corrupt entries."""
+    from models import Decision
+
+    decision = db.query(Decision).filter(Decision.id == decision_id).first()
+    if not decision or not decision.thresholds:
+        return []
+
+    try:
+        raw_thresholds = json.loads(decision.thresholds)
+    except (json.JSONDecodeError, TypeError):
+        return []
+    if not isinstance(raw_thresholds, list):
+        return []
+
+    selected_metric_ids = {
+        dw.metric_id
+        for dw in db.query(DecisionWeight)
+        .filter(DecisionWeight.decision_id == decision_id)
+        .all()
+    }
+    valid_operators = {"<=", ">=", "<", ">"}
+    thresholds = []
+    for threshold in raw_thresholds:
+        if not isinstance(threshold, dict):
+            continue
+
+        metric_id = threshold.get("metric_id")
+        if not isinstance(metric_id, int) or isinstance(metric_id, bool):
+            continue
+        if metric_id not in selected_metric_ids:
+            continue
+
+        operator = threshold.get("operator", ">=")
+        if operator not in valid_operators:
+            continue
+
+        try:
+            value = float(threshold.get("value"))
+        except (TypeError, ValueError):
+            continue
+        if not math.isfinite(value) or value < 0.0 or value > 100.0:
+            continue
+
+        thresholds.append(
+            {"metric_id": metric_id, "operator": operator, "value": value}
+        )
+
+    return thresholds
 
 
 def filter_by_thresholds(decision_id: int, db: Session) -> dict:
@@ -27,13 +79,7 @@ def filter_by_thresholds(decision_id: int, db: Session) -> dict:
     if not decision:
         return {"passed": [], "failed": [], "all_passed": True, "survivor_results": []}
 
-    # Parse thresholds JSON
-    thresholds = []
-    if decision.thresholds:
-        try:
-            thresholds = json.loads(decision.thresholds)
-        except (json.JSONDecodeError, TypeError):
-            thresholds = []
+    thresholds = sanitize_persisted_thresholds(decision_id, db)
 
     activities = db.query(Activity).filter(Activity.decision_id == decision_id).all()
 
@@ -68,8 +114,8 @@ def filter_by_thresholds(decision_id: int, db: Session) -> dict:
         fail_reasons = []
         for t in thresholds:
             metric_id = t.get("metric_id")
-            operator = t.get("operator", "<=")
-            threshold_value = float(t.get("value", 0))
+            operator = t.get("operator", ">=")
+            threshold_value = t.get("value", 0)
 
             # Validate threshold value — clamp with warning if out of range
             if threshold_value < 0.0 or threshold_value > 100.0:
@@ -158,7 +204,7 @@ def compute_alternative_fit_scores(decision_id: int, db: Session) -> list[dict]:
 
     Returns sorted list of {activity_id, activity_name, fit_score, weighted_score}.
     """
-    from models import Activity, AlternativeScore, Metric
+    from models import Activity, AlternativeScore
 
     activities = db.query(Activity).filter(Activity.decision_id == decision_id).all()
     if not activities:
@@ -171,11 +217,6 @@ def compute_alternative_fit_scores(decision_id: int, db: Session) -> list[dict]:
     weights: dict[int, float] = {dw.metric_id: dw.weight for dw in decision_weights}
     if not weights:
         return []
-
-    # Build higher_is_better map for metrics in the weights
-    metric_ids = list(weights.keys())
-    metrics = db.query(Metric).filter(Metric.id.in_(metric_ids)).all()
-    higher_is_better_map = {m.id: m.higher_is_better for m in metrics}
 
     results = []
     for activity in activities:
@@ -194,10 +235,7 @@ def compute_alternative_fit_scores(decision_id: int, db: Session) -> list[dict]:
 
         for metric_id, weight in weights.items():
             score = scores.get(metric_id, 0.0)
-            effective_score = (
-                score if higher_is_better_map.get(metric_id, True) else (100.0 - score)
-            )
-            numerator += effective_score * weight
+            numerator += score * weight
             denominator += weight
             weighted_scores.append(
                 {
@@ -248,11 +286,10 @@ def compute_dimension_scores(decision_id: int, db: Session) -> list[dict]:
     if not weights:
         return []
 
-    # Get metric-to-dimension mapping and higher_is_better map
+    # Get metric-to-dimension mapping
     metric_ids = list(weights.keys())
     metrics = db.query(Metric).filter(Metric.id.in_(metric_ids)).all()
     metric_category: dict[int, str] = {m.id: m.category for m in metrics}
-    higher_is_better_map: dict[int, bool] = {m.id: m.higher_is_better for m in metrics}
 
     # Get scores for each activity (we'll average across activities for diagnose mode
     # where there's typically just one activity)
@@ -280,15 +317,10 @@ def compute_dimension_scores(decision_id: int, db: Session) -> list[dict]:
             if s is not None:
                 scores_list.append(s)
         avg_score = sum(scores_list) / len(scores_list) if scores_list else 0.0
-        effective_avg_score = (
-            avg_score
-            if higher_is_better_map.get(metric_id, True)
-            else (100.0 - avg_score)
-        )
         dim_groups[cat].append(
             {
                 "metric_id": metric_id,
-                "score": effective_avg_score,
+                "score": avg_score,
                 "weight": weights[metric_id],
             }
         )

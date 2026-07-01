@@ -1,5 +1,3 @@
-import json
-
 from sqlalchemy.orm import Session
 
 from models import Activity, DecisionWeight, AlternativeScore, Decision, Metric
@@ -7,6 +5,7 @@ from services.robustness import build_decision_robustness
 from services.scoring import (
     compute_alternative_fit_scores,
     filter_by_thresholds,
+    sanitize_persisted_thresholds,
 )
 
 
@@ -22,16 +21,6 @@ def _selected_metrics(decision_id: int, db: Session) -> list[Metric]:
     return db.query(Metric).filter(Metric.id.in_(metric_ids)).order_by(Metric.id).all()
 
 
-def _parse_json_list(value: str | None) -> list:
-    if not value:
-        return []
-    try:
-        parsed = json.loads(value)
-    except (json.JSONDecodeError, TypeError):
-        return []
-    return parsed if isinstance(parsed, list) else []
-
-
 def get_decision_export_data(decision_id: int, db: Session) -> dict | None:
     decision = db.query(Decision).filter(Decision.id == decision_id).first()
     if not decision:
@@ -45,7 +34,7 @@ def get_decision_export_data(decision_id: int, db: Session) -> dict | None:
     )
     metrics = _selected_metrics(decision_id, db)
     results = compute_alternative_fit_scores(decision_id, db)
-    thresholds = _parse_json_list(getattr(decision, "thresholds", None))
+    thresholds = sanitize_persisted_thresholds(decision_id, db)
     filter_result = filter_by_thresholds(decision_id, db) if thresholds else None
     result_basis = (
         filter_result.get("survivor_results", results) if filter_result else results
@@ -154,7 +143,7 @@ def generate_markdown_brief(data: dict) -> str:
         for threshold in data["thresholds"]:
             metric_name = metric_names.get(threshold.get("metric_id"), "Unknown metric")
             lines.append(
-                f"- {metric_name} {threshold.get('operator', '<=')} {threshold.get('value')}"
+                f"- {metric_name} {threshold.get('operator', '>=')} {threshold.get('value')}"
             )
 
     robustness = data.get("robustness")

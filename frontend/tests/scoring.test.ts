@@ -58,7 +58,7 @@ function names(results: FitResult[]) {
   ];
 
   const results = recomputeFitScores(activities, rows, {}, metrics);
-  assertDeepEqual(names(results), ["Beta", "Alpha"]);
+  assertDeepEqual(names(results), ["Alpha", "Beta"]);
   assertEqual(results[0].fit_score, 0.8);
   assertEqual(results[1].fit_score, 0.2);
 }
@@ -123,8 +123,8 @@ function names(results: FitResult[]) {
   const beta = results.find((r) => r.activity_id === 2)!;
   assertDeepEqual(alpha.weighted_scores.map((s) => s.metric_id), [10, 11]);
   assertDeepEqual(beta.weighted_scores.map((s) => s.metric_id), [10, 11]);
-  assertEqual(alpha.fit_score, 0.15);
-  assertEqual(beta.fit_score, 0.9);
+  assertEqual(alpha.fit_score, 0.45);
+  assertEqual(beta.fit_score, 0.5);
 }
 
 {
