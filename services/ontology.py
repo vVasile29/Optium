@@ -6,7 +6,7 @@ cover the minimum criteria set applicable to virtually ANY decision.
 """
 
 import re
-from typing import List, Tuple
+from typing import List
 
 UNIVERSAL_DIMENSIONS = [
     {
@@ -208,8 +208,8 @@ for dim in UNIVERSAL_DIMENSIONS:
         UNIVERSAL_METRICS.append(m)
 
 
-def suggest_criteria(query: str) -> Tuple[str, list]:
-    """Given a free-text query, return the universal criteria set.
+def get_universal_criteria() -> tuple[str, list]:
+    """Return the universal criteria set.
 
     Returns (dimension_name, metrics_list).
     Always returns the full universal set since all dimensions apply

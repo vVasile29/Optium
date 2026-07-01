@@ -89,6 +89,7 @@ class Activity(Base):
     name = Column(String, index=True, nullable=False)
     category = Column(String, nullable=False)
     description = Column(String, nullable=True)
+    # TODO: make non-nullable with ondelete="CASCADE" in a migration-backed cleanup.
     decision_id = Column(Integer, ForeignKey("decisions.id"), nullable=True, index=True)
 
     decision = relationship("Decision", back_populates="activities")

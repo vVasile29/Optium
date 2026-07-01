@@ -1,6 +1,10 @@
 """Direct unit tests for services/ontology.py — extract_alternatives and clean logic."""
 
-from services.ontology import UNIVERSAL_METRICS, extract_alternatives
+from services.ontology import (
+    UNIVERSAL_METRICS,
+    extract_alternatives,
+    get_universal_criteria,
+)
 
 
 def test_universal_metrics_are_benefit_oriented():
@@ -9,6 +13,12 @@ def test_universal_metrics_are_benefit_oriented():
     assert metrics["Risk"]["higher_is_better"] is True
     assert metrics["Time Required"]["higher_is_better"] is True
     assert all(m["higher_is_better"] is True for m in UNIVERSAL_METRICS)
+
+
+def test_get_universal_criteria_returns_all_metrics():
+    category, metrics = get_universal_criteria()
+    assert category == "General"
+    assert metrics == UNIVERSAL_METRICS
 
 
 # ── Basic "or" extraction ──

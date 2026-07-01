@@ -37,6 +37,7 @@ def _robustness_for_results(
 
 
 def _parse_thresholds(decision: Decision, db: Session) -> list:
+    # DB-safety layer for saved thresholds from older versions or manual edits.
     return sanitize_persisted_thresholds(decision.id, db)
 
 
@@ -588,6 +589,7 @@ def apply_thresholds(
         .all()
     }
 
+    # Request-boundary validation: reject malformed threshold payloads before persisting.
     valid_operators = {"<=", ">=", "<", ">"}
     validated = []
     for t in thresholds_input:
@@ -601,6 +603,8 @@ def apply_thresholds(
             t.get("metric_id"), selected_metric_ids, "metric_id"
         )
 
+        if not isinstance(operator, str):
+            raise HTTPException(status_code=422, detail="Threshold operator must be a string")
         if operator not in valid_operators:
             raise HTTPException(
                 status_code=422,

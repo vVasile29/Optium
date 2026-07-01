@@ -1,5 +1,4 @@
 import json
-import logging
 import math
 from sqlalchemy.orm import Session
 
@@ -43,6 +42,8 @@ def sanitize_persisted_thresholds(decision_id: int, db: Session) -> list[dict]:
             continue
 
         operator = threshold.get("operator", ">=")
+        if not isinstance(operator, str):
+            continue
         if operator not in valid_operators:
             continue
 
@@ -79,6 +80,8 @@ def filter_by_thresholds(decision_id: int, db: Session) -> dict:
     if not decision:
         return {"passed": [], "failed": [], "all_passed": True, "survivor_results": []}
 
+    # Persisted thresholds may predate current route validation or be corrupted
+    # directly in the DB, so sanitize once at this safety boundary.
     thresholds = sanitize_persisted_thresholds(decision_id, db)
 
     activities = db.query(Activity).filter(Activity.decision_id == decision_id).all()
@@ -113,18 +116,9 @@ def filter_by_thresholds(decision_id: int, db: Session) -> dict:
 
         fail_reasons = []
         for t in thresholds:
-            metric_id = t.get("metric_id")
-            operator = t.get("operator", ">=")
-            threshold_value = t.get("value", 0)
-
-            # Validate threshold value — clamp with warning if out of range
-            if threshold_value < 0.0 or threshold_value > 100.0:
-                logging.warning(
-                    "filter_by_thresholds: threshold value %s out of range for metric %s — clamped to 0-100",
-                    threshold_value,
-                    metric_id,
-                )
-                threshold_value = max(0.0, min(100.0, threshold_value))
+            metric_id = t["metric_id"]
+            operator = t["operator"]
+            threshold_value = t["value"]
 
             # Skip unknown metric_ids
             if metric_id not in metric_map:
@@ -139,7 +133,7 @@ def filter_by_thresholds(decision_id: int, db: Session) -> dict:
                 )
                 continue
 
-            # Clamp score to 0-100
+            # Clamp score to protect filtering from corrupt persisted AlternativeScore data.
             score = max(0.0, min(100.0, score))
 
             metric_name = metric_map[metric_id].name

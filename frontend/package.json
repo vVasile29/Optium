@@ -7,6 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "test": "rm -rf /tmp/opencode/optium-frontend-test-dist && tsc -p tsconfig.test.json && node /tmp/opencode/optium-frontend-test-dist/tests/scoring.test.js",
+    "typecheck": "tsc --noEmit",
     "preview": "vite preview"
   },
   "dependencies": {
